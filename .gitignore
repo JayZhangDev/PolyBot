@@ -6,3 +6,4 @@ __pycache__/
 *.db-journal
 .DS_Store
 .streamlit/secrets.toml
+launchd.*.log
