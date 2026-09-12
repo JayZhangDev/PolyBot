@@ -10,13 +10,31 @@ GAMMA_BASE = "https://gamma-api.polymarket.com"
 
 
 def fetch_active_markets(limit: int = 50) -> list[dict]:
-    resp = requests.get(
-        f"{GAMMA_BASE}/markets",
-        params={"active": "true", "closed": "false", "limit": limit},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    all_markets = []
+    offset = 0
+    page_size = 100
+    while len(all_markets) < limit:
+        resp = requests.get(
+            f"{GAMMA_BASE}/markets",
+            params={
+                "active": "true",
+                "closed": "false",
+                "limit": page_size,
+                "offset": offset,
+                "order": "endDate",
+                "ascending": "true",
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        page = resp.json()
+        if not page:
+            break
+        all_markets.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+    return all_markets[:limit]
 
 
 def summarize(markets: list[dict]) -> None:
