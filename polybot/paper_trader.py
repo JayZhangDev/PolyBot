@@ -164,17 +164,26 @@ def run() -> dict:
             _close_position(pos, winner, f"Resolved: winner={winner}")
             closed += 1
 
-    # 2. Open new positions from signals
+    # 2. Open new positions from signals — priority: odds_mismatch > momentum > longshot
+    #    Cap concentration: max 3 new positions per strategy per cycle
     opened = 0
     excluded = open_market_ids()
     sigs = find_signals(exclude_market_ids=excluded)
+    priority_order = {"odds_mismatch": 0, "momentum": 1, "longshot": 2}
+    sigs.sort(key=lambda s: priority_order.get(s.get("strategy", ""), 3))
+
+    per_strategy_count: dict[str, int] = {}
     for sig in sigs:
         if not can_open_new_position():
             break
+        strat = sig.get("strategy", "?")
+        if per_strategy_count.get(strat, 0) >= 3:
+            continue
         bankroll = get_bankroll()
         pid = _open_position(sig, bankroll)
         if pid:
             opened += 1
+            per_strategy_count[strat] = per_strategy_count.get(strat, 0) + 1
 
     return {"opened": opened, "closed": closed, "summary": summary()}
 

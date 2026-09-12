@@ -7,8 +7,8 @@ from pathlib import Path
 DB_PATH = Path("polybot.db")
 
 STARTING_BANKROLL = 1000.0  # paper USDC
-BET_FRACTION = 0.02          # 2% of bankroll per bet
-MAX_OPEN_POSITIONS = 20
+BET_FRACTION = 0.01          # 2% of bankroll per bet
+MAX_OPEN_POSITIONS = 10
 
 
 def _connect() -> sqlite3.Connection:
