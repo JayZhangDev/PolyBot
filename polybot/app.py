@@ -1,7 +1,6 @@
 """PolyBot dashboard — Streamlit UI for browsing positions, P&L, and current signals."""
 from __future__ import annotations
 
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -11,10 +10,11 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from polybot.portfolio import STARTING_BANKROLL, get_bankroll, summary
-from polybot.signals import find_signals
-
-DB_PATH = Path("polybot.db")
+from polybot import __version__
+from polybot.db import connect
+from polybot.portfolio import STARTING_BANKROLL, summary
+from polybot.signals import find_signals, mispricing_candidates
+from polybot.storage import init_db
 
 # ---------- theme ----------
 ACCENT = "#5b8bd6"
@@ -24,20 +24,14 @@ RED = "#f87171"
 DIM = "#7089b0"
 
 
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
 def load_positions() -> pd.DataFrame:
-    with _connect() as c:
+    with connect() as c:
         rows = c.execute("SELECT * FROM positions ORDER BY id DESC").fetchall()
     return pd.DataFrame([dict(r) for r in rows])
 
 
 def load_bankroll_history() -> pd.DataFrame:
-    with _connect() as c:
+    with connect() as c:
         rows = c.execute("SELECT * FROM bankroll_events ORDER BY id ASC").fetchall()
     return pd.DataFrame([dict(r) for r in rows])
 
@@ -45,7 +39,7 @@ def load_bankroll_history() -> pd.DataFrame:
 def load_latest_prices() -> dict:
     """Return {market_id: yes_price} for latest snapshot of every market."""
     prices = {}
-    with _connect() as c:
+    with connect() as c:
         rows = c.execute("""
             SELECT market_id, yes_price
             FROM snapshots s
@@ -171,11 +165,12 @@ st.markdown(
     "<div style='padding:8px 0 24px 0;border-bottom:1px solid #262626;margin-bottom:24px'>"
     f"<span style='color:{ACCENT};font-size:28px;font-weight:700;letter-spacing:2px'>◆ POLYBOT</span>"
     f"<span style='color:{DIM};margin-left:16px;font-size:13px'>"
-    "PREDICTION MARKET PAPER-TRADER  ·  v0.1</span>"
+    f"PREDICTION MARKET PAPER-TRADER  ·  v{__version__}</span>"
     "</div>",
     unsafe_allow_html=True,
 )
 
+init_db()
 s = summary()
 positions = load_positions()
 bankroll_hist = load_bankroll_history()
@@ -186,7 +181,8 @@ open_pos = positions[positions["status"] == "OPEN"].copy() if not positions.empt
 if not open_pos.empty:
     def _mark(row):
         p = latest_prices.get(row["market_id"])
-        if p is None: return None
+        if p is None:
+            return None
         return p if row["side"] == "YES" else (1 - p)
     open_pos["mark_price"] = open_pos.apply(_mark, axis=1)
     open_pos["market_value"] = open_pos["shares"] * open_pos["mark_price"]
@@ -274,11 +270,22 @@ with tab_sig:
     else:
         st.write(f"**{len(sigs)}** actionable signals right now (excluding markets already in your book):")
         sig_df = pd.DataFrame(sigs)
-        sig_df = sig_df[["strategy","question","side","yes_price","no_price","volume","end_date","reason"]]
-        sig_df["yes_price"] = sig_df["yes_price"].round(3)
-        sig_df["no_price"] = sig_df["no_price"].round(3)
+        sig_df = sig_df[["strategy", "question", "side", "entry_price", "yes_price", "volume", "end_date", "reason"]]
+        for col in ("entry_price", "yes_price"):
+            sig_df[col] = sig_df[col].round(3)
         sig_df["volume"] = sig_df["volume"].astype(float).round(0)
         st.dataframe(sig_df, use_container_width=True, hide_index=True)
+
+    st.markdown(f"<div style='color:{ACCENT};letter-spacing:2px;margin:24px 0 8px 0'>"
+                f"◆ MISPRICING WATCHLIST (neg-risk events, not traded)</div>",
+                unsafe_allow_html=True)
+    st.caption("Edges use executable bid/ask across every leg seen. Legs outside the "
+               "top markets by volume are missing, so treat these as leads, not arbs.")
+    cands = mispricing_candidates()
+    if not cands:
+        st.info("No neg-risk events with a basket edge right now.")
+    else:
+        st.dataframe(pd.DataFrame(cands), use_container_width=True, hide_index=True)
 
 # ---------- EQUITY CURVE tab ----------
 with tab_equity:
@@ -307,4 +314,4 @@ with tab_equity:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-st.caption(f"PolyBot v0.1 · autonomous paper-trader running hourly · starting bankroll ${STARTING_BANKROLL:,.0f}")
+st.caption(f"PolyBot v{__version__} · autonomous paper-trader running hourly · starting bankroll ${STARTING_BANKROLL:,.0f}")

@@ -1,40 +1,72 @@
-"""Fetch active Polymarket markets and persist snapshots to SQLite."""
+"""Fetch Polymarket markets from the Gamma API and persist snapshots to SQLite."""
 from __future__ import annotations
 
 import argparse
+import logging
+from datetime import datetime, timezone
+
 import requests
 
 from polybot.storage import counts, save_snapshot
 
 GAMMA_BASE = "https://gamma-api.polymarket.com"
+PAGE_SIZE = 100
+TIMEOUT = 30
+
+log = logging.getLogger(__name__)
 
 
-def fetch_active_markets(limit: int = 50) -> list[dict]:
-    all_markets = []
+def fetch_active_markets(limit: int = 500) -> list[dict]:
+    """Return up to `limit` open markets, highest volume first.
+
+    Sorting by volume (rather than soonest end date) means the snapshot set is
+    made of markets the strategies can actually trade; every signal requires
+    $200k+ volume and at least several days to resolution.
+    """
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    markets: list[dict] = []
     offset = 0
-    page_size = 100
-    while len(all_markets) < limit:
+    while len(markets) < limit:
         resp = requests.get(
             f"{GAMMA_BASE}/markets",
             params={
                 "active": "true",
                 "closed": "false",
-                "limit": page_size,
+                "end_date_min": now,
+                "order": "volumeNum",
+                "ascending": "false",
+                "limit": PAGE_SIZE,
                 "offset": offset,
-                "order": "endDate",
-                "ascending": "true",
             },
-            timeout=30,
+            timeout=TIMEOUT,
         )
         resp.raise_for_status()
         page = resp.json()
         if not page:
             break
-        all_markets.extend(page)
-        if len(page) < page_size:
+        markets.extend(page)
+        if len(page) < PAGE_SIZE:
             break
-        offset += page_size
-    return all_markets[:limit]
+        offset += PAGE_SIZE
+    return markets[:limit]
+
+
+def fetch_markets_by_id(market_ids: list[str]) -> list[dict]:
+    """Fetch specific markets, including ones that have closed or resolved.
+
+    The active-market listing stops returning a market once it closes, so this
+    is how open paper positions learn that their market has resolved.
+    Failures are logged and skipped so one bad ID never blocks the cycle.
+    """
+    markets = []
+    for mid in market_ids:
+        try:
+            resp = requests.get(f"{GAMMA_BASE}/markets/{mid}", timeout=TIMEOUT)
+            resp.raise_for_status()
+            markets.append(resp.json())
+        except requests.RequestException as exc:
+            log.warning("Could not refresh market %s: %s", mid, exc)
+    return markets
 
 
 def summarize(markets: list[dict]) -> None:
@@ -49,8 +81,8 @@ def summarize(markets: list[dict]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--limit", type=int, default=50, help="Max markets to fetch")
+    parser = argparse.ArgumentParser(description="Snapshot active Polymarket markets.")
+    parser.add_argument("--limit", type=int, default=500, help="Max markets to fetch")
     parser.add_argument("--quiet", action="store_true", help="Skip printout")
     args = parser.parse_args()
 
@@ -59,7 +91,6 @@ def main() -> None:
     if not args.quiet:
         summarize(markets)
 
-    print(f"\n→ Saving snapshots to SQLite...")
     saved = save_snapshot(markets)
     stats = counts()
     print(f"→ Saved {saved} snapshots this run.")

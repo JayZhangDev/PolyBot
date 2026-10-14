@@ -11,8 +11,8 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
 
+from polybot.db import connect
 from polybot.portfolio import (
     calculate_stake,
     can_open_new_position,
@@ -23,19 +23,13 @@ from polybot.portfolio import (
     record_bankroll_change,
     summary,
 )
-from polybot.signals import find_signals
+from polybot.signals import STRATEGY_PRIORITY, find_signals
 
-DB_PATH = Path("polybot.db")
-
-
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+MAX_NEW_PER_STRATEGY = 3  # concentration cap per cycle
 
 
 def _latest_snapshot(market_id: str) -> dict | None:
-    with _connect() as c:
+    with connect() as c:
         row = c.execute("""
             SELECT s.yes_price, s.no_price, m.end_date, m.raw_json
             FROM snapshots s
@@ -51,7 +45,7 @@ def _latest_snapshot(market_id: str) -> dict | None:
 def _open_position(signal: dict, bankroll: float) -> int | None:
     """Open a paper position and debit bankroll. Returns position id."""
     side = signal["side"]
-    price = signal["yes_price"] if side == "YES" else signal["no_price"]
+    price = signal["entry_price"]
     if price is None or price <= 0:
         return None
     stake = calculate_stake(bankroll)
@@ -59,9 +53,10 @@ def _open_position(signal: dict, bankroll: float) -> int | None:
         return None
     shares = round(stake / price, 4)
     now = datetime.now(timezone.utc).isoformat()
-    with _connect() as c:
+    with connect() as c:
         cur = c.execute("""
-            INSERT INTO positions (market_id, question, side, entry_price, shares, stake, opened_at, opened_reason, status)
+            INSERT INTO positions (market_id, question, side, entry_price, shares, stake,
+                                   opened_at, opened_reason, status)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OPEN')
         """, (signal["market_id"], signal["question"], side, price, shares, stake, now, signal["reason"]))
         pos_id = cur.lastrowid
@@ -142,7 +137,7 @@ def _close_position(position: sqlite3.Row, winner: str | None, reason: str) -> N
         pnl = -stake
         status = "CLOSED_LOSS"
 
-    with _connect() as c:
+    with connect() as c:
         c.execute("""
             UPDATE positions
             SET closed_at = ?, close_price = ?, pnl = ?, close_reason = ?, status = ?
@@ -164,20 +159,20 @@ def run() -> dict:
             _close_position(pos, winner, f"Resolved: winner={winner}")
             closed += 1
 
-    # 2. Open new positions from signals — priority: odds_mismatch > momentum > longshot
-    #    Cap concentration: max 3 new positions per strategy per cycle
+    # 2. Open new positions from signals in strategy priority order,
+    #    capped at MAX_NEW_PER_STRATEGY new positions per strategy per cycle
     opened = 0
     excluded = open_market_ids()
     sigs = find_signals(exclude_market_ids=excluded)
-    priority_order = {"odds_mismatch": 0, "momentum": 1, "longshot": 2}
-    sigs.sort(key=lambda s: priority_order.get(s.get("strategy", ""), 3))
+    priority = {name: i for i, name in enumerate(STRATEGY_PRIORITY)}
+    sigs.sort(key=lambda s: priority.get(s.get("strategy", ""), len(priority)))
 
     per_strategy_count: dict[str, int] = {}
     for sig in sigs:
         if not can_open_new_position():
             break
         strat = sig.get("strategy", "?")
-        if per_strategy_count.get(strat, 0) >= 3:
+        if per_strategy_count.get(strat, 0) >= MAX_NEW_PER_STRATEGY:
             continue
         bankroll = get_bankroll()
         pid = _open_position(sig, bankroll)
@@ -191,7 +186,7 @@ def run() -> dict:
 if __name__ == "__main__":
     result = run()
     s = result["summary"]
-    print(f"\n→ Paper-trader run complete")
+    print("\n→ Paper-trader run complete")
     print(f"  Opened this run: {result['opened']}")
     print(f"  Closed this run: {result['closed']}")
     print(f"\n  Bankroll:        ${s['bankroll']:.2f}")

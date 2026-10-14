@@ -2,23 +2,16 @@
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
-DB_PATH = Path("polybot.db")
+from polybot.db import connect
 
 STARTING_BANKROLL = 1000.0  # paper USDC
-BET_FRACTION = 0.01          # 2% of bankroll per bet
+BET_FRACTION = 0.01          # 1% of bankroll per bet
 MAX_OPEN_POSITIONS = 10
 
 
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
 def init_portfolio_tables() -> None:
-    with _connect() as c:
+    with connect() as c:
         c.executescript("""
         CREATE TABLE IF NOT EXISTS positions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,7 +53,7 @@ def init_portfolio_tables() -> None:
 
 def get_bankroll() -> float:
     init_portfolio_tables()
-    with _connect() as c:
+    with connect() as c:
         row = c.execute(
             "SELECT balance_after FROM bankroll_events ORDER BY id DESC LIMIT 1"
         ).fetchone()
@@ -69,7 +62,7 @@ def get_bankroll() -> float:
 
 def get_open_positions() -> list[sqlite3.Row]:
     init_portfolio_tables()
-    with _connect() as c:
+    with connect() as c:
         return c.execute(
             "SELECT * FROM positions WHERE status = 'OPEN' ORDER BY opened_at DESC"
         ).fetchall()
@@ -88,7 +81,7 @@ def calculate_stake(bankroll: float) -> float:
 
 
 def record_bankroll_change(delta: float, reason: str) -> float:
-    with _connect() as c:
+    with connect() as c:
         row = c.execute(
             "SELECT balance_after FROM bankroll_events ORDER BY id DESC LIMIT 1"
         ).fetchone()
@@ -104,7 +97,7 @@ def record_bankroll_change(delta: float, reason: str) -> float:
 
 def summary() -> dict:
     init_portfolio_tables()
-    with _connect() as c:
+    with connect() as c:
         n_open = c.execute("SELECT COUNT(*) FROM positions WHERE status = 'OPEN'").fetchone()[0]
         n_closed = c.execute("SELECT COUNT(*) FROM positions WHERE status != 'OPEN'").fetchone()[0]
         n_wins = c.execute("SELECT COUNT(*) FROM positions WHERE status = 'CLOSED_WIN'").fetchone()[0]
