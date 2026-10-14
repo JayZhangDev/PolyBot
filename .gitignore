@@ -7,3 +7,7 @@ __pycache__/
 .DS_Store
 .streamlit/secrets.toml
 launchd.*.log
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
