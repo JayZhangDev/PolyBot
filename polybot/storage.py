@@ -42,6 +42,15 @@ def init_db() -> None:
 
         CREATE INDEX IF NOT EXISTS idx_snapshots_market ON snapshots(market_id);
         CREATE INDEX IF NOT EXISTS idx_snapshots_time ON snapshots(captured_at);
+
+        -- How each market ended. outcome is NULL until it resolves.
+        CREATE TABLE IF NOT EXISTS resolutions (
+            market_id TEXT PRIMARY KEY,
+            outcome TEXT,              -- 'YES', 'NO', 'VOID'
+            resolved_at TEXT,
+            last_checked TEXT NOT NULL,
+            FOREIGN KEY (market_id) REFERENCES markets(id)
+        );
         """)
         _migrate(c)
 

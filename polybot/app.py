@@ -11,8 +11,11 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from polybot import __version__
+from polybot.calibration import HORIZONS_DAYS, LONGSHOT_MAX
+from polybot.calibration import report as calibration_report
 from polybot.db import connect
 from polybot.portfolio import STARTING_BANKROLL, summary
+from polybot.resolutions import counts as resolution_counts
 from polybot.signals import find_signals, mispricing_candidates
 from polybot.storage import init_db
 
@@ -223,7 +226,9 @@ with col5:
 
 st.divider()
 
-tab_port, tab_hist, tab_sig, tab_equity = st.tabs(["PORTFOLIO", "HISTORY", "SIGNALS", "EQUITY CURVE"])
+tab_port, tab_hist, tab_sig, tab_equity, tab_cal = st.tabs(
+    ["PORTFOLIO", "HISTORY", "SIGNALS", "EQUITY CURVE", "CALIBRATION"]
+)
 
 # ---------- PORTFOLIO tab ----------
 with tab_port:
@@ -242,7 +247,7 @@ with tab_port:
         display["Stake"] = display["Stake"].round(2)
         display["Value"] = display["Value"].round(2)
         display["Unrealized P&L"] = display["Unrealized P&L"].round(2)
-        st.dataframe(display, use_container_width=True, hide_index=True)
+        st.dataframe(display, width="stretch", hide_index=True)
 
 # ---------- HISTORY tab ----------
 with tab_hist:
@@ -256,7 +261,7 @@ with tab_hist:
         display.columns = ["#", "Market", "Side", "Entry", "Close", "Stake", "P&L", "Status", "Reason", "Closed"]
         for col in ("Entry", "Close", "Stake", "P&L"):
             display[col] = display[col].astype(float).round(3)
-        st.dataframe(display, use_container_width=True, hide_index=True)
+        st.dataframe(display, width="stretch", hide_index=True)
 
 # ---------- SIGNALS tab ----------
 with tab_sig:
@@ -274,7 +279,7 @@ with tab_sig:
         for col in ("entry_price", "yes_price"):
             sig_df[col] = sig_df[col].round(3)
         sig_df["volume"] = sig_df["volume"].astype(float).round(0)
-        st.dataframe(sig_df, use_container_width=True, hide_index=True)
+        st.dataframe(sig_df, width="stretch", hide_index=True)
 
     st.markdown(f"<div style='color:{ACCENT};letter-spacing:2px;margin:24px 0 8px 0'>"
                 f"◆ MISPRICING WATCHLIST (neg-risk events, not traded)</div>",
@@ -285,7 +290,7 @@ with tab_sig:
     if not cands:
         st.info("No neg-risk events with a basket edge right now.")
     else:
-        st.dataframe(pd.DataFrame(cands), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(cands), width="stretch", hide_index=True)
 
 # ---------- EQUITY CURVE tab ----------
 with tab_equity:
@@ -312,6 +317,80 @@ with tab_equity:
             xaxis_title="", yaxis_title="Bankroll ($)",
             margin=dict(l=20, r=20, t=10, b=20),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
+
+# ---------- CALIBRATION tab ----------
+with tab_cal:
+    st.markdown(f"<div style='color:{ACCENT};letter-spacing:2px;margin-bottom:8px'>"
+                f"◆ HOW WELL DO MARKET PRICES PREDICT OUTCOMES?</div>",
+                unsafe_allow_html=True)
+    st.caption("YES price recorded N days before each market resolved, against what happened. "
+               "Points on the dashed line are perfectly calibrated.")
+    horizon = st.radio("Horizon", HORIZONS_DAYS, index=1, horizontal=True,
+                       format_func=lambda d: f"{d} day" + ("s" if d > 1 else "") + " before")
+    rep = calibration_report(horizon)
+    rc = resolution_counts()
+    if not rep["n"]:
+        st.info(f"No resolved markets with a snapshot {horizon}+ days before resolution yet. "
+                f"Resolutions recorded so far: {rc.get('YES', 0) + rc.get('NO', 0)} "
+                f"({rc.get('PENDING', 0)} pending). On an existing database, run "
+                "`python -m polybot.resolutions --backfill` once.")
+    else:
+        c1, c2, c3, c4 = st.columns(4)
+        skill = rep["brier_skill"]
+        tiles = [
+            (c1, "MARKETS SCORED", f"{rep['n']:,}", BRIGHT),
+            (c2, "BRIER SCORE", f"{rep['brier']:.4f}", BRIGHT),
+            (c3, "SKILL VS BASE RATE", f"{skill:+.3f}" if skill is not None else "n/a",
+             (GREEN if (skill or 0) >= 0 else RED)),
+            (c4, "YES BASE RATE", f"{rep['base_rate']:.1%}", BRIGHT),
+        ]
+        for col, label, value, color in tiles:
+            with col:
+                st.markdown(f"<div style='color:{DIM};font-size:11px;letter-spacing:2px'>{label}</div>"
+                            f"<div style='color:{color};font-size:28px;font-weight:600'>{value}</div>",
+                            unsafe_allow_html=True)
+        st.caption("Brier: 0 is perfect, 0.25 is always guessing 50%. "
+                   "Skill: 1 is perfect, 0 is no better than predicting the base rate.")
+
+        bins = pd.DataFrame(rep["bins"])
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", hoverinfo="skip",
+                                 line=dict(color=DIM, width=1, dash="dash"), showlegend=False))
+        fig.add_trace(go.Scatter(
+            x=bins["mean_price"], y=bins["observed_rate"], mode="lines+markers",
+            line=dict(color=ACCENT, width=2),
+            marker=dict(size=[max(9, min(26, 6 + n ** 0.5 * 2)) for n in bins["count"]],
+                        color=ACCENT, line=dict(color="#01040f", width=2)),
+            customdata=bins[["bin", "count"]],
+            hovertemplate=("Price bucket %{customdata[0]}<br>Avg price %{x:.3f}<br>"
+                           "YES happened %{y:.1%}<br>%{customdata[1]} markets<extra></extra>"),
+            showlegend=False,
+        ))
+        fig.update_layout(
+            height=460, template="plotly_dark", paper_bgcolor="#01040f", plot_bgcolor="#01040f",
+            font=dict(color="#d8e2f5"), margin=dict(l=20, r=20, t=10, b=20),
+            xaxis=dict(title="Market YES price", range=[0, 1], gridcolor="rgba(80,130,220,0.12)"),
+            yaxis=dict(title="Share that resolved YES", range=[0, 1], tickformat=".0%",
+                       gridcolor="rgba(80,130,220,0.12)"),
+        )
+        st.plotly_chart(fig, width="stretch")
+        st.caption("Marker size grows with the number of markets in the bucket.")
+
+        ls = rep["longshot"]
+        if ls:
+            verdict = ("overpriced: supports fading them" if ls["mean_price"] > ls["observed_rate"]
+                       else "not overpriced: no support for fading them")
+            st.markdown(
+                f"<div style='color:{DIM};font-size:11px;letter-spacing:2px;margin-top:8px'>LONGSHOT CHECK</div>"
+                f"<div style='color:#d8e2f5'>Contracts priced at or below {LONGSHOT_MAX:.2f} averaged "
+                f"<b>{ls['mean_price']:.1%}</b> and resolved YES <b>{ls['observed_rate']:.1%}</b> of the time "
+                f"({ls['n']} markets), so longshots look {verdict}.</div>",
+                unsafe_allow_html=True)
+
+        with st.expander("Bucket table"):
+            table = bins.rename(columns={"bin": "Price bucket", "mean_price": "Avg price",
+                                         "observed_rate": "YES rate", "count": "Markets"})
+            st.dataframe(table.round(3), width="stretch", hide_index=True)
 
 st.caption(f"PolyBot v{__version__} · autonomous paper-trader running hourly · starting bankroll ${STARTING_BANKROLL:,.0f}")
