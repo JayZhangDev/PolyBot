@@ -18,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from polybot.agent import export_state as agent_state  # noqa: E402
 from polybot.calibration import HORIZONS_DAYS, report  # noqa: E402
 from polybot.db import db_path  # noqa: E402
 
@@ -124,6 +125,7 @@ def main() -> None:
         "open_positions": opens,
         "resolved": resolved(c),
         "last_run": last_run(c),
+        "agent": agent_state(c),
     }
     c.close()
     data["calibration"] = {str(h): report(h) for h in HORIZONS_DAYS}

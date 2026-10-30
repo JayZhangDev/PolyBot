@@ -11,3 +11,5 @@ launchd.*.log
 .ruff_cache/
 *.egg-info/
 build/
+agent.log
+pipeline.log
