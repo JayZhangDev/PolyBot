@@ -122,6 +122,8 @@ python scripts/export_dashboard.py            # writes docs/data.json (the agent
 python -m http.server 8765 --directory docs   # open http://localhost:8765/#agent
 ```
 
+The export also writes `paper_pnl.txt` (git-ignored): the agent's paper P&L, equity minus its $1,000 start, as one number on one line, for a local desktop wallpaper to read.
+
 ### Running the agent every 10 minutes (Windows + WSL)
 
 The hourly pipeline runs as a Windows scheduled task that calls into WSL; the agent uses the same setup:

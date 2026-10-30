@@ -1,14 +1,17 @@
 """Export PolyBot state from polybot.db to docs/data.json for the static dashboard.
 
-Usage:  python scripts/export_dashboard.py [--out docs/data.json]
+Usage:  python scripts/export_dashboard.py [--out docs/data.json] [--pnl-out paper_pnl.txt]
 
 Reads the database read-only and writes only aggregate paper-trading data
-(no API keys, no raw market JSON), so the output is safe to publish.
+(no API keys, no raw market JSON), so the output is safe to publish. Also writes
+paper_pnl.txt (git-ignored): the v2 agent's paper P&L as one number, for a local
+desktop wallpaper to read.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -16,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+PNL_FILE = ROOT / "paper_pnl.txt"
 sys.path.insert(0, str(ROOT))
 
 from polybot.agent import export_state as agent_state  # noqa: E402
@@ -88,9 +92,26 @@ def last_run(c: sqlite3.Connection) -> dict:
     return {"at": row[0], "status": "unknown"}
 
 
+def write_paper_pnl(agent: dict, path: Path = PNL_FILE) -> float | None:
+    """Write the v2 agent's paper P&L (equity minus its starting bankroll) as one number on one line.
+
+    Written to a temp file and renamed, so a reader never sees half a number. Nothing is
+    written until the agent has run once.
+    """
+    summary = agent.get("summary")
+    if not summary:
+        return None
+    pnl = round(summary["equity"] - summary["starting_bankroll"], 2) + 0.0   # + 0.0 turns -0.0 into 0.0
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(f"{pnl:.2f}\n", encoding="utf-8")
+    os.replace(tmp, path)
+    return pnl
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(ROOT / "docs" / "data.json"))
+    ap.add_argument("--pnl-out", default=str(PNL_FILE))
     args = ap.parse_args()
 
     c = sqlite3.connect(f"file:{db_path().as_posix()}?mode=ro", uri=True)
@@ -134,6 +155,9 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(data, indent=2), encoding="utf-8")
     print(f"Wrote {out} ({len(opens)} open, {len(data['resolved'])} resolved)")
+    pnl = write_paper_pnl(data["agent"], Path(args.pnl_out))
+    if pnl is not None:
+        print(f"Wrote {args.pnl_out} (v2 agent paper P&L {pnl:+.2f})")
 
 
 if __name__ == "__main__":
