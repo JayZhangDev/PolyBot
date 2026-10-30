@@ -4,9 +4,21 @@
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-PolyBot is a research pipeline for [Polymarket](https://polymarket.com) prediction markets. Every hour it snapshots the most-traded markets into SQLite, records how every market it has seen eventually resolved, and paper-trades a set of signals with a fixed bankroll.
+PolyBot is a research project on [Polymarket](https://polymarket.com) prediction markets. It started as a data pipeline and a rule-based paper trader, and **v2 adds an autonomous agent** that estimates its own probabilities, sizes bets with the Kelly criterion, and learns from how markets resolve. Everything is paper trading; no real money is ever used.
 
-The core question is **how well prediction-market prices forecast outcomes**. The calibration tracker scores the price each market traded at 1, 7 and 30 days before resolution against what happened (Brier score, skill vs. base rate, reliability curve), and directly tests the hypothesis behind the longshot strategy. A Streamlit dashboard shows calibration alongside the paper book, closed trades, current signals and the equity curve.
+The core question throughout is **how well prediction-market prices forecast outcomes, and whether a disciplined model can find mispricings**. The v1 calibration tracker scores market prices against outcomes; the v2 agent asks whether any market is priced far enough from a calibrated estimate to be worth a bet, and logs every decision so the answer is auditable.
+
+## Evolution: from pipeline to agent
+
+| Version | What it added | What it can do |
+|---|---|---|
+| **v0.0** | Gamma API fetcher, SQLite snapshots | Record market prices over time |
+| **v0.1** | Paper trader, longshot and momentum rules, dashboard | Trade fixed rules once an hour with a flat 1% stake |
+| **v0.1.1** | Executable prices (bid/ask), settlement fixes, tests, CI | Honest fills and correct P&L |
+| **v0.2** | Calibration tracker | Measure how well prices predict outcomes (Brier, reliability) |
+| **v2.0** | **Autonomous agent** ([`polybot/agent.py`](polybot/agent.py)) | Every 10 minutes: estimate probability per market, rank by edge, size with half-Kelly under a hard risk cap, log every decision, learn from resolutions |
+
+The hourly pipeline is unchanged. The agent runs beside it, shares its market, snapshot and resolution tables, and keeps its own positions and bankroll so the two strategies can be compared cleanly. The git history shows each step.
 
 [![PolyBot dashboard](docs/screenshots/dashboard.png)](https://jayzhangdev.github.io/PolyBot/)
 
@@ -54,7 +66,73 @@ python -m polybot.calibration             # all horizons
 python -m polybot.calibration --horizon 7
 ```
 
-## Strategies
+## PolyBot v2: the autonomous agent
+
+`python -m polybot.agent` runs one cycle; a scheduled task runs it every 10 minutes ([setup](#running-the-agent-every-10-minutes-windows--wsl)).
+
+```mermaid
+flowchart LR
+    A[Gamma API<br/>2,000 active markets] --> F[Filter<br/>liquidity > $10k<br/>> 7 days left]
+    F --> E[Estimator<br/>base rate + recency<br/>x category trust]
+    E --> R[Rank by edge<br/>abs&#40;edge&#41; > 8%]
+    R --> K[Half-Kelly sizing<br/>6% cap, 10 positions]
+    K --> X[(agent_positions<br/>agent_decisions)]
+    X --> L[Learning loop<br/>on resolution]
+    L --> P[(agent_priors<br/>agent_performance)]
+    P --> E
+    X --> D[Dashboard<br/>Agent tab]
+```
+
+### 1. Scan and filter
+Each cycle pulls up to 2,000 active markets (highest volume first) and keeps those with more than **$10,000 liquidity** and more than **7 days** to resolution. Eligible markets are snapshotted every 10 minutes, which gives the recency signal real price history.
+
+### 2. Probability estimation
+For each market the agent builds an ensemble estimate from three parts:
+
+1. **Base rate (category-calibrated).** The market price is passed through a per-category calibration curve, `sigmoid(gamma * logit(price))`. `gamma = 1` means prices are calibrated; the prior `gamma = 1.1` encodes the documented favorite-longshot bias (longshots are overpriced, favorites underpriced). Markets are classified as politics, crypto, sports, science or other.
+2. **Recency signal.** The price plus half of its last-24-hour move (momentum continuation). With no 24-hour history the signal equals the price and adds no edge.
+3. **Calibration prior (trust).** The blend `0.6 * base + 0.4 * recency` is shrunk toward the market price by a per-category *trust* weight: `estimate = market + trust * (blend - market)`. Trust starts at 0.7 and, once 20 agent forecasts in a category have resolved, follows that category's Brier skill against the market.
+
+The output for each market is `estimated_prob`, `market_prob` and `edge = estimated_prob - market_prob`.
+
+### 3. Opportunity filter
+Only markets with `abs(edge) > 8%` are considered, ranked by edge size.
+
+### 4. Kelly sizing
+Buying a binary share at price `c` with win probability `q` has Kelly fraction `(q - c) / (1 - c)` (edge divided by `1 - c`; equivalent to `(b*q - (1-q)) / b` with net odds `b = (1-c)/c`). The agent bets **half-Kelly**, **never more than 6% of bankroll on one market**, and **never more than 10 open positions**. `c` is the executable price (YES at the ask, NO at 1 - bid), so a trade whose edge is eaten by the spread is skipped.
+
+### 5. Paper execution and audit trail
+Every considered trade is written to `agent_decisions` (timestamp, market, question, market probability, estimate, edge, Kelly stake, action, reason, plus the estimator components as JSON). A position opens only if all rules pass; otherwise the reason is logged (`max_positions_reached`, `edge_consumed_by_spread`, `insufficient_cash`, and so on). A repeat skip for the same market is logged at most once every 6 hours so the log stays readable. Nothing is sent to any exchange.
+
+### 6. Learning loop
+Each cycle the agent first settles positions whose markets resolved (a winning share pays $1, VOID refunds the stake). It then refits each category's `gamma` on resolved markets by regularised log-loss (thin categories stay near the prior), updates trust, and writes `agent_performance` rows: agent vs market **Brier score**, **Brier skill** and **edge capture** (realized edge divided by predicted edge), by category.
+
+### Findings so far
+
+- **At the specified 8% threshold the agent finds nothing, and that is the honest result.** Across the first scans of about 1,300 eligible markets the largest estimated edge was **0.9%**, so no opportunities and no positions. With a conservative estimator shrunk toward the price, large edges require large evidence, and a liquid prediction market is mostly efficient. The agent is working as designed; the threshold was not loosened to produce trades.
+- **The learning loop is data-starved.** PolyBot has seen only a handful of markets resolve so far, so category priors still sit at their documented defaults. Calibration and accuracy numbers appear on the dashboard as markets resolve.
+- **Dry run at a 0.5% threshold** (separate database, not the real log): 10 positions opened immediately, then 412 candidates were skipped for `max_positions_reached` and 9 because the bid/ask spread consumed the edge. Sizes were small (half-Kelly of about 1% of bankroll) because the edges were.
+- **Exploring lower thresholds.** `python -m polybot.agent --min-edge 0.02` runs a cycle with a different threshold. Use a separate database (`POLYBOT_DB`) for experiments so they do not mix into the main audit log.
+
+### Dashboard: Agent tab
+The static dashboard (`docs/index.html`) has an **Agent** tab with a live opportunity feed (edge bars colour-coded by size, rows pulse when a market newly clears the threshold, refreshed every 30 seconds), open positions with market vs model probability, the full decision log (filter by opened or skipped), and performance by category.
+
+```bash
+python scripts/export_dashboard.py            # writes docs/data.json (the agent task does this each cycle)
+python -m http.server 8765 --directory docs   # open http://localhost:8765/#agent
+```
+
+### Running the agent every 10 minutes (Windows + WSL)
+
+The hourly pipeline runs as a Windows scheduled task that calls into WSL; the agent uses the same setup:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install_agent_task.ps1
+```
+
+This registers `PolyBot-Agent` (every 10 minutes, one instance at a time, 9-minute limit), which runs [`scripts/run_agent.sh`](scripts/run_agent.sh): one agent cycle, then a dashboard export. Output goes to `agent.log`.
+
+## Strategies (v1 pipeline)
 
 | Strategy | Rule | Rationale |
 |---|---|---|
@@ -128,15 +206,18 @@ polybot/
   signals.py       trading signals and the mispricing watchlist
   portfolio.py     bankroll ledger and position sizing
   paper_trader.py  resolution, settlement and order placement
-  pipeline.py      the hourly cycle
+  pipeline.py      the hourly cycle (v1, unchanged)
+  agent.py         the 10-minute autonomous agent (v2)
   app.py           Streamlit dashboard
+scripts/           dashboard export, agent runner and scheduler installer
 tests/             pytest suite (runs against a temporary database)
 ```
 
 ## Testing
 
 ```bash
-pytest          # 49 tests: pricing, storage, signals, settlement, resolutions, calibration
+pytest          # 99 tests: pricing, storage, signals, settlement, resolutions, calibration,
+                # and the agent (Kelly sizing, estimator, risk rules, settlement, learning)
 ruff check .
 ```
 
@@ -148,6 +229,7 @@ CI runs both on every push and pull request, on Python 3.10 and 3.12.
 - [x] **v0.1** Paper trader, three signals, Streamlit dashboard
 - [x] **v0.1.1** Resolution fix for closed markets, bid/ask fills, longshot fade, tests and CI
 - [x] **v0.2** Calibration tracker: resolution sweep, Brier and skill scores, reliability curve, longshot check
+- [x] **v2.0** Autonomous agent: probability ensemble, 8% edge filter, half-Kelly with 6% cap, decision audit log, learning loop, Agent tab
 - [ ] **v0.3** Strategy scorecard: P&L, max drawdown and Brier score per strategy, compared with the market baseline
 - [ ] **v0.4** Full-event fetching and a basket executor for neg-risk mispricings
 
@@ -156,12 +238,13 @@ CI runs both on every push and pull request, on Python 3.10 and 3.12.
 - **Paper only.** No orders are sent anywhere, and fills assume the full stake executes at the top of book.
 - **Fees are not modelled.** Taker fees would reduce P&L further.
 - **Sample size.** Calibration needs hundreds of resolved markets per horizon before buckets are meaningful; early numbers are noisy.
-- **Hourly resolution.** Moves inside the hour are invisible, and momentum compares snapshots about 20 to 24 hours apart.
-- **Coverage.** Only the 500 highest-volume open markets are snapshotted each hour, plus any market currently held.
+- **Hourly resolution (v1).** Moves inside the hour are invisible to the pipeline, and its momentum signal compares snapshots about 20 to 24 hours apart.
+- **Agent evidence.** The agent's recency signal needs 24 hours of its own 10-minute snapshots before it contributes, and its calibration priors need many resolved markets before they move from the documented defaults.
+- **Coverage.** The pipeline snapshots the 500 highest-volume open markets each hour, plus any market currently held. The agent scans up to 2,000.
 
 ## Disclaimer
 
-This is a research and learning project. Nothing here is financial advice, and the strategies have not been shown to be profitable.
+This is a research and learning project. The agent is paper-only: it has no wallet, no keys and no order-placement code. Nothing here is financial advice, and the strategies have not been shown to be profitable.
 
 ## License
 
