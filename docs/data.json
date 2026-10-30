@@ -1,0 +1,211 @@
+{
+  "generated_at": "2026-10-30T05:29:36+00:00",
+  "summary": {
+    "cash": 904.38,
+    "equity": 999.93632955,
+    "starting_bankroll": 1000.0,
+    "realized_pnl": 0,
+    "unrealized_pnl": -0.06367044999999472,
+    "open_count": 10,
+    "closed_count": 0,
+    "wins": 0,
+    "markets_tracked": 502,
+    "snapshots": 2002
+  },
+  "equity_curve": [
+    {
+      "at": "2026-10-30 01:36:41",
+      "balance_after": 1000.0
+    },
+    {
+      "at": "2026-10-30 01:36:41",
+      "balance_after": 990.0
+    },
+    {
+      "at": "2026-10-30 01:36:41",
+      "balance_after": 980.1
+    },
+    {
+      "at": "2026-10-30 01:36:41",
+      "balance_after": 970.3000000000001
+    },
+    {
+      "at": "2026-10-30 02:15:59",
+      "balance_after": 960.6
+    },
+    {
+      "at": "2026-10-30 02:15:59",
+      "balance_after": 950.99
+    },
+    {
+      "at": "2026-10-30 02:15:59",
+      "balance_after": 941.48
+    },
+    {
+      "at": "2026-10-30 04:49:16",
+      "balance_after": 932.07
+    },
+    {
+      "at": "2026-10-30 04:49:16",
+      "balance_after": 922.75
+    },
+    {
+      "at": "2026-10-30 04:49:16",
+      "balance_after": 913.52
+    },
+    {
+      "at": "2026-10-30 05:00:09",
+      "balance_after": 904.38
+    }
+  ],
+  "open_positions": [
+    {
+      "market": "Clarity Act (H.R.3633) signed into law in 2026?",
+      "side": "NO",
+      "entry_price": 0.968,
+      "current_price": 0.9675,
+      "shares": 9.4421,
+      "stake": 9.14,
+      "unrealized_pnl": -0.004768249999999696,
+      "opened_at": "2026-10-30T05:00:09.849592+00:00",
+      "reason": "Longshot fade: YES=0.033, vol=$24,697,408, buying NO"
+    },
+    {
+      "market": "Putin out as President of Russia by December 31, 2026?",
+      "side": "NO",
+      "entry_price": 0.982,
+      "current_price": 0.9815,
+      "shares": 9.3992,
+      "stake": 9.23,
+      "unrealized_pnl": -0.004685199999999057,
+      "opened_at": "2026-10-30T04:49:16.946656+00:00",
+      "reason": "Longshot fade: YES=0.018, vol=$26,849,464, buying NO"
+    },
+    {
+      "market": "Will the Iranian regime fall before 2027?",
+      "side": "NO",
+      "entry_price": 0.94,
+      "current_price": 0.935,
+      "shares": 9.9149,
+      "stake": 9.32,
+      "unrealized_pnl": -0.04956849999999946,
+      "opened_at": "2026-10-30T04:49:16.893525+00:00",
+      "reason": "Longshot fade: YES=0.065, vol=$28,589,349, buying NO"
+    },
+    {
+      "market": "Will Raphael Warnock win the 2028 Democratic presidential nomination?",
+      "side": "NO",
+      "entry_price": 0.982,
+      "current_price": 0.9815,
+      "shares": 9.5825,
+      "stake": 9.41,
+      "unrealized_pnl": -0.0047762500000008146,
+      "opened_at": "2026-10-30T04:49:16.838791+00:00",
+      "reason": "Longshot fade: YES=0.018, vol=$34,399,223, buying NO"
+    },
+    {
+      "market": "Will Trump acquire Greenland before 2027?",
+      "side": "NO",
+      "entry_price": 0.976,
+      "current_price": 0.9755,
+      "shares": 9.7439,
+      "stake": 9.51,
+      "unrealized_pnl": -0.004825549999999623,
+      "opened_at": "2026-10-30T02:15:59.955337+00:00",
+      "reason": "Longshot fade: YES=0.025, vol=$35,879,994, buying NO"
+    },
+    {
+      "market": "Will the US confirm that aliens exist before 2027?",
+      "side": "NO",
+      "entry_price": 0.963,
+      "current_price": 0.9625,
+      "shares": 9.9792,
+      "stake": 9.61,
+      "unrealized_pnl": -0.005019999999998248,
+      "opened_at": "2026-10-30T02:15:59.901537+00:00",
+      "reason": "Longshot fade: YES=0.037, vol=$43,097,520, buying NO"
+    },
+    {
+      "market": "Will China invade Taiwan by end of 2026?",
+      "side": "NO",
+      "entry_price": 0.971,
+      "current_price": 0.9745,
+      "shares": 9.9897,
+      "stake": 9.7,
+      "unrealized_pnl": 0.03496265000000065,
+      "opened_at": "2026-10-30T02:15:59.846479+00:00",
+      "reason": "Longshot fade: YES=0.029, vol=$45,293,227, buying NO"
+    },
+    {
+      "market": "Will Chelsea Clinton win the 2028 Democratic presidential nomination?",
+      "side": "NO",
+      "entry_price": 0.989,
+      "current_price": 0.988,
+      "shares": 9.909,
+      "stake": 9.8,
+      "unrealized_pnl": -0.009907999999999362,
+      "opened_at": "2026-10-30T01:36:41.206782+00:00",
+      "reason": "Longshot fade: YES=0.012, vol=$51,070,246, buying NO"
+    },
+    {
+      "market": "Will Bernie Sanders win the 2028 Democratic presidential nomination?",
+      "side": "NO",
+      "entry_price": 0.988,
+      "current_price": 0.987,
+      "shares": 10.0202,
+      "stake": 9.9,
+      "unrealized_pnl": -0.010062599999999478,
+      "opened_at": "2026-10-30T01:36:41.189262+00:00",
+      "reason": "Longshot fade: YES=0.013, vol=$52,923,370, buying NO"
+    },
+    {
+      "market": "Will Jesus Christ return before 2027?",
+      "side": "NO",
+      "entry_price": 0.988,
+      "current_price": 0.9875,
+      "shares": 10.1215,
+      "stake": 10.0,
+      "unrealized_pnl": -0.005018749999999628,
+      "opened_at": "2026-10-30T01:36:41.172014+00:00",
+      "reason": "Longshot fade: YES=0.013, vol=$66,756,947, buying NO"
+    }
+  ],
+  "resolved": [
+    {
+      "market": "LoL: Top Esports vs Bilibili Gaming (BO3) - Worlds Group Stage",
+      "outcome": "YES",
+      "resolved_at": "2026-10-30T01:57:10.071751+00:00",
+      "side": null,
+      "entry_price": null,
+      "pnl": null,
+      "correct": null
+    },
+    {
+      "market": "LoL: Top Esports vs Bilibili Gaming - Game 2 Winner",
+      "outcome": "YES",
+      "resolved_at": "2026-10-30T01:37:10.242278+00:00",
+      "side": null,
+      "entry_price": null,
+      "pnl": null,
+      "correct": null
+    }
+  ],
+  "last_run": {
+    "at": "2026-10-30T05:00:01.617041+00:00",
+    "status": "success"
+  },
+  "calibration": {
+    "1": {
+      "horizon_days": 1,
+      "n": 0
+    },
+    "7": {
+      "horizon_days": 7,
+      "n": 0
+    },
+    "30": {
+      "horizon_days": 30,
+      "n": 0
+    }
+  }
+}

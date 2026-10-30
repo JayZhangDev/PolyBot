@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PolyBot Dashboard</title>
+<meta name="description" content="Live paper-trading and calibration dashboard for PolyBot, a Polymarket research pipeline.">
+<style>
+:root{--bg:#0b0f17;--panel:#121826;--line:#1f2937;--text:#e5e9f0;--dim:#8b95a7;--accent:#5b9dff;--pos:#34d399;--neg:#f87171;--warn:#fbbf24}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:28px 16px 48px}
+header{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:24px}
+h1{margin:0;font-size:24px;letter-spacing:-.3px}
+.sub{color:var(--dim);margin-top:2px}
+.run{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:6px 14px;font-size:13px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--dim)}
+.dot.success{background:var(--pos)}.dot.failed{background:var(--neg)}
+.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-bottom:14px}
+.card,.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+.label{color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+.big{font-size:28px;font-weight:600;margin-top:4px;font-variant-numeric:tabular-nums}
+.note{color:var(--dim);font-size:12px;margin-top:2px}
+.panel{margin-bottom:14px;overflow:hidden}
+.panel h2{margin:0 0 12px;font-size:15px;font-weight:600}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;min-width:560px}
+th{color:var(--dim);font-weight:500;font-size:12px;text-align:right;padding:6px 8px;border-bottom:1px solid var(--line)}
+td{padding:8px;text-align:right;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+td:first-child{max-width:420px}
+tr:last-child td{border-bottom:0}
+.pos{color:var(--pos)}.neg{color:var(--neg)}.dim{color:var(--dim)}
+.tag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line)}
+.tag.good{color:var(--pos);border-color:#1f6f55}.tag.bad{color:var(--neg);border-color:#7f3030}
+.tabs{display:flex;gap:6px;margin-bottom:10px}
+.tabs button{background:none;color:var(--dim);border:1px solid var(--line);border-radius:8px;padding:4px 12px;cursor:pointer;font:inherit}
+.tabs button.on{color:var(--text);border-color:var(--accent);background:#16213a}
+.empty{color:var(--dim);padding:24px 0;text-align:center}
+svg text{fill:var(--dim);font-size:11px}
+.stats{display:flex;gap:24px;flex-wrap:wrap;margin-top:8px;color:var(--dim);font-size:13px}
+.stats b{color:var(--text)}
+/* Glass redesign */
+body{background:var(--bg);position:relative;min-height:100vh}
+body::before{content:"";position:fixed;inset:-20%;z-index:-1;pointer-events:none;
+  background:radial-gradient(40% 40% at 20% 20%,rgba(91,157,255,.20),transparent 70%),
+             radial-gradient(35% 35% at 80% 30%,rgba(139,92,246,.16),transparent 70%),
+             radial-gradient(40% 40% at 50% 90%,rgba(52,211,153,.12),transparent 70%);
+  animation:drift 22s ease-in-out infinite alternate}
+@keyframes drift{0%{transform:translate(0,0) scale(1)}50%{transform:translate(4%,3%) scale(1.08)}100%{transform:translate(-4%,5%) scale(1.02)}}
+.card,.panel,.run{background:rgba(20,28,46,.55);-webkit-backdrop-filter:blur(16px) saturate(140%);backdrop-filter:blur(16px) saturate(140%);
+  border:1px solid rgba(255,255,255,.08);box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 8px 32px -16px rgba(0,0,0,.6)}
+.card:hover,.panel:hover{border-color:rgba(91,157,255,.35);box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 0 24px -6px rgba(91,157,255,.35)}
+h1{font-size:30px;font-weight:800;letter-spacing:-.8px;background:linear-gradient(90deg,#fff,#9db8ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.label{font-weight:600;letter-spacing:.1em}
+.big{font-size:36px;font-weight:800;letter-spacing:-1px;line-height:1.15;margin-top:6px}
+.big.pos,td.pos{text-shadow:0 0 18px rgba(52,211,153,.55)}
+.big.neg,td.neg{text-shadow:0 0 18px rgba(248,113,113,.55)}
+.pos,.neg{font-weight:600}
+.panel h2{font-size:16px;font-weight:700;letter-spacing:-.2px}
+th{font-weight:600;letter-spacing:.05em;text-transform:uppercase;font-size:11px}
+tbody tr{transition:background .2s,transform .2s,box-shadow .2s;position:relative}
+tbody tr:hover{background:linear-gradient(90deg,rgba(91,157,255,.14),rgba(91,157,255,.04));transform:translateX(3px);box-shadow:inset 3px 0 0 var(--accent)}
+.tabs button.on{box-shadow:0 0 14px -4px rgba(91,157,255,.6);background:rgba(91,157,255,.14)}
+.dot{width:9px;height:9px}
+/* Axiom-style polish */
+.big,td,.stats b{font-feature-settings:"tnum";font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+.big{letter-spacing:-.5px}
+td:first-child{font-family:inherit}
+.card,.panel,.run{transition:border-color .2s,transform .2s,box-shadow .2s}
+.card:hover{transform:translateY(-3px)}
+.tag.good{background:rgba(52,211,153,.08)}.tag.bad{background:rgba(248,113,113,.08)}
+.tabs button{transition:all .15s}.tabs button:hover{color:var(--text)}
+.dot.success{animation:pulse 1.8s infinite}
+@keyframes pulse{0%{box-shadow:0 0 6px var(--pos),0 0 0 0 rgba(52,211,153,.7)}70%{box-shadow:0 0 10px var(--pos),0 0 0 9px rgba(52,211,153,0)}100%{box-shadow:0 0 6px var(--pos),0 0 0 0 rgba(52,211,153,0)}}
+.in{animation:rise .5s cubic-bezier(.2,.7,.2,1) backwards;animation-delay:calc(var(--i,0) * 60ms)}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.sk{display:block;border-radius:6px;background:linear-gradient(90deg,#182036 25%,#222d4a 50%,#182036 75%);background-size:200% 100%;animation:shim 1.3s infinite linear}
+@keyframes shim{to{background-position:-200% 0}}
+.sk.row{height:18px;margin:12px 0}
+svg .draw{stroke-dasharray:1200;stroke-dashoffset:1200;animation:draw 1.1s ease-out forwards}
+@keyframes draw{to{stroke-dashoffset:0}}
+svg .pop{transform-box:fill-box;transform-origin:center;animation:pop .5s cubic-bezier(.2,.9,.3,1.4) both;animation-delay:.5s}
+@keyframes pop{from{transform:scale(0);opacity:0}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}svg .draw{stroke-dashoffset:0}}
+footer{color:var(--dim);font-size:12px;text-align:center;margin-top:24px}
+footer a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>PolyBot</h1>
+      <div class="sub">Paper-trading &amp; calibration research on Polymarket · no real money</div>
+    </div>
+    <div class="run"><span class="dot" id="runDot"></span><span id="runText">Loading…</span></div>
+  </header>
+
+  <div class="grid" id="kpis">
+    <div class="card"><span class="sk row" style="width:50%"></span><span class="sk" style="height:30px;width:75%"></span></div>
+    <div class="card"><span class="sk row" style="width:50%"></span><span class="sk" style="height:30px;width:75%"></span></div>
+    <div class="card"><span class="sk row" style="width:50%"></span><span class="sk" style="height:30px;width:75%"></span></div>
+    <div class="card"><span class="sk row" style="width:50%"></span><span class="sk" style="height:30px;width:75%"></span></div>
+  </div>
+
+  <div class="panel">
+    <h2>Open paper positions</h2>
+    <div class="scroll" id="open"><span class="sk row"></span><span class="sk row"></span><span class="sk row"></span><span class="sk row"></span></div>
+  </div>
+
+  <div class="panel">
+    <h2>Recently resolved markets</h2>
+    <div class="scroll" id="resolved"><span class="sk row"></span><span class="sk row"></span></div>
+  </div>
+
+  <div class="panel">
+    <h2>Calibration: market price vs. actual outcome rate</h2>
+    <div class="tabs" id="tabs"></div>
+    <div id="calib"><span class="sk" style="height:200px"></span></div>
+  </div>
+
+  <footer>
+    Data refreshed <span id="gen">…</span> · Prices are Polymarket YES/NO midpoints from the latest snapshot ·
+    <a href="https://github.com/JayZhangDev/PolyBot">Source on GitHub</a>
+  </footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const usd = (n, sign) => n == null ? "–" : (n = Math.round(n * 100) / 100, sign && n > 0 ? "+" : n < 0 ? "−" : "") + "$" + Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const cents = p => p == null ? "–" : (p * 100).toFixed(1) + "¢";
+const cls = n => n >= .005 ? "pos" : n <= -.005 ? "neg" : "";
+const when = s => {
+  if (!s) return "unknown";
+  const d = new Date(/Z|[+-]\d\d:?\d\d$/.test(s) ? s : s.replace(" ", "T") + "Z");
+  return isNaN(d) ? s : d.toLocaleString([], {dateStyle:"medium", timeStyle:"short"});
+};
+const ago = s => {
+  const d = new Date(s); if (isNaN(d)) return "";
+  const m = Math.round((Date.now() - d) / 60000);
+  return m < 60 ? m + " min ago" : m < 2880 ? Math.round(m / 60) + " h ago" : Math.round(m / 1440) + " d ago";
+};
+
+function kpis(s) {
+  const total = s.equity - (s.starting_bankroll ?? s.equity);
+  const items = [
+    ["Equity", usd(s.equity), `${usd(total, true)} vs. ${usd(s.starting_bankroll)} start`, cls(total)],
+    ["Bankroll (cash)", usd(s.cash), `${s.open_count} open positions`, ""],
+    ["Realized P&L", usd(s.realized_pnl, true), `${s.closed_count} closed trades`, cls(s.realized_pnl)],
+    ["Unrealized P&L", usd(s.unrealized_pnl, true), "marked to latest price", cls(s.unrealized_pnl)],
+    ["Tracking", s.markets_tracked.toLocaleString(), `${s.snapshots.toLocaleString()} price snapshots`, ""],
+  ];
+  $("kpis").innerHTML = items.map(([l, v, n, c], i) =>
+    `<div class="card in" style="--i:${i}"><div class="label">${l}</div><div class="big ${c}">${v}</div><div class="note">${n}</div></div>`).join("");
+  countUp(items);
+}
+
+// Animate "$1,234.56"-style values from zero to their final number.
+function countUp(items) {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  document.querySelectorAll("#kpis .big").forEach((el, i) => {
+    const txt = items[i][1], m = txt.match(/^([+−]?\$?)([\d,]+(?:\.\d+)?)$/);
+    if (!m) return;
+    const end = parseFloat(m[2].replace(/,/g, "")), dec = (m[2].split(".")[1] || "").length, t0 = performance.now();
+    const tick = now => {
+      const k = Math.min(1, (now - t0) / 900), v = end * (1 - Math.pow(1 - k, 3));
+      el.textContent = m[1] + v.toLocaleString(undefined, {minimumFractionDigits: dec, maximumFractionDigits: dec});
+      if (k < 1) requestAnimationFrame(tick); else el.textContent = txt;
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+function openTable(rows) {
+  if (!rows.length) return $("open").innerHTML = `<div class="empty">No open positions.</div>`;
+  $("open").innerHTML = `<table><thead><tr><th>Market</th><th>Side</th><th>Entry</th><th>Current</th><th>Stake</th><th>Unrealized P&amp;L</th></tr></thead><tbody>` +
+    rows.map(p => `<tr><td title="${esc(p.reason)}">${esc(p.market)}</td><td>${esc(p.side)}</td><td>${cents(p.entry_price)}</td><td>${cents(p.current_price)}</td><td>${usd(p.stake)}</td><td class="${cls(p.unrealized_pnl)}">${usd(p.unrealized_pnl, true)}</td></tr>`).join("") +
+    `</tbody></table>`;
+}
+
+function resolvedTable(rows) {
+  if (!rows.length) return $("resolved").innerHTML = `<div class="empty">No markets resolved yet.</div>`;
+  $("resolved").innerHTML = `<table><thead><tr><th>Market</th><th>Outcome</th><th>Our trade</th><th>Result</th><th>P&amp;L</th><th>Resolved</th></tr></thead><tbody>` +
+    rows.map(r => {
+      const res = r.correct == null ? `<span class="dim">no position</span>` :
+        `<span class="tag ${r.correct ? "good" : "bad"}">${r.correct ? "Correct" : "Wrong"}</span>`;
+      const trade = r.side ? `${esc(r.side)} @ ${cents(r.entry_price)}` : `<span class="dim">–</span>`;
+      return `<tr><td>${esc(r.market)}</td><td>${esc(r.outcome)}</td><td>${trade}</td><td>${res}</td><td class="${cls(r.pnl)}">${r.pnl == null ? "–" : usd(r.pnl, true)}</td><td class="dim">${when(r.resolved_at)}</td></tr>`;
+    }).join("") + `</tbody></table>`;
+}
+
+function calibChart(rep) {
+  if (!rep || !rep.n) return `<div class="empty">Not enough resolved markets yet for this horizon.<br>
+    <span class="note">Calibration needs markets that resolved at least this long after PolyBot first snapshotted them.</span></div>`;
+  const W = 420, H = 360, m = {l:44, r:16, t:12, b:40}, pw = W - m.l - m.r, ph = H - m.t - m.b;
+  const x = v => m.l + v * pw, y = v => m.t + (1 - v) * ph;
+  const ticks = [0, .25, .5, .75, 1];
+  const maxN = Math.max(...rep.bins.map(b => b.count));
+  let g = ticks.map(t => `<line x1="${x(t)}" x2="${x(t)}" y1="${y(0)}" y2="${y(1)}" stroke="#1f2937"/><line x1="${x(0)}" x2="${x(1)}" y1="${y(t)}" y2="${y(t)}" stroke="#1f2937"/>
+    <text x="${x(t)}" y="${H - 22}" text-anchor="middle">${(t*100)|0}%</text><text x="${m.l - 8}" y="${y(t) + 4}" text-anchor="end">${(t*100)|0}%</text>`).join("");
+  g += `<line x1="${x(0)}" y1="${y(0)}" x2="${x(1)}" y2="${y(1)}" stroke="#8b95a7" stroke-dasharray="5 4"/>`;
+  g += `<polyline class="draw" fill="none" stroke="#5b9dff" stroke-width="1.5" points="${rep.bins.map(b => x(b.mean_price) + "," + y(b.observed_rate)).join(" ")}"/>`;
+  g += rep.bins.map(b => `<circle class="pop" cx="${x(b.mean_price)}" cy="${y(b.observed_rate)}" r="${4 + 8 * Math.sqrt(b.count / maxN)}" fill="#5b9dff" fill-opacity=".55" stroke="#5b9dff"><title>${esc(b.bin)}: priced ${(b.mean_price*100).toFixed(1)}%, happened ${(b.observed_rate*100).toFixed(1)}% (n=${b.count})</title></circle>`).join("");
+  g += `<text x="${m.l + pw / 2}" y="${H - 4}" text-anchor="middle">Market price (predicted probability of YES)</text>
+    <text transform="translate(12 ${m.t + ph / 2}) rotate(-90)" text-anchor="middle">Actual YES rate</text>`;
+  const skill = rep.brier_skill == null ? "n/a" : (rep.brier_skill >= 0 ? "+" : "") + rep.brier_skill.toFixed(3);
+  const ls = rep.longshot ? `<span>Longshots (≤15%): priced <b>${(rep.longshot.mean_price*100).toFixed(1)}%</b>, won <b>${(rep.longshot.observed_rate*100).toFixed(1)}%</b> (n=${rep.longshot.n})</span>` : "";
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:520px;display:block;margin:auto" role="img" aria-label="Calibration chart">${g}</svg>
+    <div class="stats"><span>Markets <b>${rep.n}</b></span><span>Base rate <b>${(rep.base_rate*100).toFixed(1)}%</b></span><span>Brier <b>${rep.brier.toFixed(4)}</b></span><span>Skill vs. base rate <b>${skill}</b></span>${ls}</div>
+    <div class="note">Dots on the dashed diagonal mean prices are perfectly calibrated. Dot size = number of markets in that price bucket.</div>`;
+}
+
+function calibration(cal) {
+  const hs = Object.keys(cal);
+  const pick = hs.find(h => cal[h].n) || "7";
+  const show = h => {
+    $("tabs").innerHTML = hs.map(k => `<button class="${k === h ? "on" : ""}" data-h="${k}">${k}-day horizon${cal[k].n ? ` (${cal[k].n})` : ""}</button>`).join("");
+    $("tabs").querySelectorAll("button").forEach(b => b.onclick = () => show(b.dataset.h));
+    $("calib").innerHTML = calibChart(cal[h]);
+  };
+  show(pick);
+}
+
+fetch("data.json?t=" + Date.now()).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(d => {
+  document.querySelectorAll(".panel").forEach((p, i) => { p.classList.add("in"); p.style.setProperty("--i", i + 3); });
+  kpis(d.summary); openTable(d.open_positions); resolvedTable(d.resolved); calibration(d.calibration);
+  const lr = d.last_run || {};
+  $("runDot").className = "dot " + (lr.status || "");
+  $("runText").textContent = `Last pipeline run: ${when(lr.at)} (${ago(lr.at)}) · ${lr.status || "unknown"}`;
+  $("gen").textContent = when(d.generated_at);
+}).catch(e => {
+  $("runText").textContent = "Could not load data.json";
+  $("kpis").innerHTML = `<div class="panel" style="grid-column:1/-1">Failed to load <code>data.json</code> (${esc(e.message)}). Serve this folder over HTTP (<code>python -m http.server</code>) rather than opening the file directly.</div>`;
+});
+</script>
+</body>
+</html>

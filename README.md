@@ -8,8 +8,9 @@ PolyBot is a research pipeline for [Polymarket](https://polymarket.com) predicti
 
 The core question is **how well prediction-market prices forecast outcomes**. The calibration tracker scores the price each market traded at 1, 7 and 30 days before resolution against what happened (Brier score, skill vs. base rate, reliability curve), and directly tests the hypothesis behind the longshot strategy. A Streamlit dashboard shows calibration alongside the paper book, closed trades, current signals and the equity curve.
 
-<!-- Add a dashboard screenshot: save it as docs/dashboard.png and uncomment the next line. -->
-<!-- ![PolyBot dashboard](docs/dashboard.png) -->
+[![PolyBot dashboard](docs/screenshots/dashboard.png)](https://jayzhangdev.github.io/PolyBot/)
+
+**[Live dashboard →](https://jayzhangdev.github.io/PolyBot/)**
 
 ## How it works
 
