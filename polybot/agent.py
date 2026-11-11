@@ -11,8 +11,8 @@ Each cycle:
 2. **Estimate**: for each market build an ensemble probability from
    (a) a category-calibrated base rate, (b) a recency (momentum) signal and
    (c) a calibration-prior weight that says how far to trust the model in that category.
-3. **Filter**: keep markets where ``abs(estimated - market) > 8%``, ranked by edge.
-4. **Size**: half-Kelly, hard-capped at 6% of bankroll per market and 10 open positions.
+3. **Filter**: keep markets where ``abs(estimated - market) > MIN_EDGE`` (1.5% in calibration mode), ranked by edge.
+4. **Size**: half-Kelly, capped at 6% of bankroll and $50 per market (minimum $2), 25 open positions max.
 5. **Execute (paper)**: open a position or skip, and log the reason either way.
 6. **Learn**: when markets resolve, settle positions, refit per-category calibration priors and
    log accuracy metrics.
@@ -52,11 +52,13 @@ SCAN_INTERVAL_MINUTES = 10
 FETCH_LIMIT = 2000               # markets pulled per scan, highest volume first
 MIN_LIQUIDITY = 10_000.0         # dollars
 MIN_DAYS_LEFT = 7.0
-MIN_EDGE = 0.08                  # 8 probability points
+# Calibration mode (paper trading only): raise to 8% once 50+ forecasts resolved and trust > 0.85
+MIN_EDGE = 0.015                 # 1.5 probability points
 KELLY_MULTIPLIER = 0.5           # half-Kelly
 MAX_STAKE_FRACTION = 0.06        # never risk more than 6% of bankroll on one market
-MAX_POSITIONS = 10
-MIN_STAKE = 1.0                  # dollars; matches the v1 paper trader
+MAX_POSITIONS = 25               # diversify across more markets while calibrating
+MIN_STAKE = 2.0                  # dollars; smaller bets are skipped, not rounded up
+MAX_STAKE = 50.0                 # dollars; Kelly can balloon on low-edge, high-confidence markets
 STARTING_BANKROLL = 1000.0       # paper dollars, separate from the v1 bankroll
 
 PRIOR_GAMMA = 1.10               # favorite-longshot prior: actual odds are more extreme than prices
@@ -98,6 +100,8 @@ class Params:
     kelly_multiplier: float = KELLY_MULTIPLIER
     max_stake_fraction: float = MAX_STAKE_FRACTION
     max_positions: int = MAX_POSITIONS
+    min_stake: float = MIN_STAKE
+    max_stake: float = MAX_STAKE
     min_liquidity: float = MIN_LIQUIDITY
     min_days_left: float = MIN_DAYS_LEFT
     momentum_k: float = MOMENTUM_K
@@ -360,10 +364,13 @@ def kelly_fraction(win_prob: float, price: float) -> float:
 
 
 def stake_for(win_prob: float, price: float, bankroll: float, params: Params | None = None) -> float:
-    """Dollar stake: ``kelly_multiplier * kelly * bankroll``, capped at ``max_stake_fraction`` of bankroll."""
+    """Dollar stake: half-Kelly of bankroll, capped at ``max_stake_fraction`` of bankroll and at ``max_stake``.
+
+    The minimum stake is enforced by :func:`decide` (a stake below ``min_stake`` is skipped, not rounded up).
+    """
     params = params or Params()
     raw = params.kelly_multiplier * kelly_fraction(win_prob, price) * bankroll
-    return round(min(raw, params.max_stake_fraction * bankroll), 2)
+    return round(min(raw, params.max_stake_fraction * bankroll, params.max_stake), 2)
 
 
 # ---------------------------------------------------------------------------
@@ -515,8 +522,8 @@ def decide(view: MarketView, est: Estimate, *, bankroll: float, cash: float, ope
 
     kelly = kelly_fraction(win_prob, price)
     stake = stake_for(win_prob, price, bankroll, params)
-    capped = params.kelly_multiplier * kelly * bankroll > params.max_stake_fraction * bankroll
-    if stake < MIN_STAKE:
+    capped = params.kelly_multiplier * kelly * bankroll > min(params.max_stake_fraction * bankroll, params.max_stake)
+    if stake < params.min_stake:
         return Sizing("SKIP", f"stake_below_minimum (${stake:.2f})", side=side, entry_price=price,
                       win_prob=win_prob, exec_edge=exec_edge, kelly_fraction=kelly)
     if stake > cash:
@@ -524,7 +531,7 @@ def decide(view: MarketView, est: Estimate, *, bankroll: float, cash: float, ope
                       entry_price=price, win_prob=win_prob, exec_edge=exec_edge, kelly_fraction=kelly)
     note = f"opened {side}; half-Kelly {kelly * params.kelly_multiplier:.1%} of bankroll"
     if capped:
-        note += f", capped at {params.max_stake_fraction:.0%}"
+        note += f", capped at ${stake:.2f}"
     return Sizing("OPEN", note, side=side, entry_price=price, win_prob=win_prob, exec_edge=exec_edge,
                   kelly_fraction=kelly, stake=stake)
 
@@ -852,7 +859,9 @@ def export_state(c: sqlite3.Connection, limit_decisions: int = 150) -> dict:
     return {
         "enabled": True,
         "config": {"min_edge": MIN_EDGE, "kelly_multiplier": KELLY_MULTIPLIER, "max_stake_fraction": MAX_STAKE_FRACTION,
-                   "max_positions": MAX_POSITIONS, "min_liquidity": MIN_LIQUIDITY, "min_days_left": MIN_DAYS_LEFT,
+                   "max_positions": MAX_POSITIONS, "min_stake": MIN_STAKE,
+                   "max_stake": MAX_STAKE, "mode": "calibration", "min_liquidity": MIN_LIQUIDITY,
+                   "min_days_left": MIN_DAYS_LEFT,
                    "interval_minutes": SCAN_INTERVAL_MINUTES},
         "last_run": last_run[0] if last_run else None,
         "summary": {"cash": cash, "equity": cash + open_value, "starting_bankroll": STARTING_BANKROLL,
@@ -872,7 +881,7 @@ def export_state(c: sqlite3.Connection, limit_decisions: int = 150) -> dict:
 def main() -> None:
     """CLI entry point: run one cycle (what the 10-minute scheduled task calls)."""
     parser = argparse.ArgumentParser(description="PolyBot v2 autonomous paper-trading agent (one cycle).")
-    parser.add_argument("--min-edge", type=float, default=MIN_EDGE, help="Edge threshold (default 0.08)")
+    parser.add_argument("--min-edge", type=float, default=MIN_EDGE, help="Edge threshold (default 0.015)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     print(f"\n=== PolyBot agent — {datetime.now(timezone.utc).isoformat()} ===")

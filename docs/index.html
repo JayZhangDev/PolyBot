@@ -156,7 +156,7 @@ footer a{color:var(--accent)}
     <div class="grid" id="agentKpis"></div>
     <div class="panel">
       <h2>Live opportunity feed <span class="note" id="feedNote"></span></h2>
-      <div class="legend"><span style="--c:var(--pos)">≥ 15% strong</span><span style="--c:var(--accent)">8–15% qualifies</span><span style="--c:var(--warn)">3–8% watching</span><span style="--c:var(--dim)">&lt; 3%</span></div>
+      <div class="legend"><span style="--c:var(--pos)">≥ 5% strong</span><span style="--c:var(--accent)">1.5–5% qualifies</span><span style="--c:var(--warn)">0.5–1.5% watching</span><span style="--c:var(--dim)">&lt; 0.5% skip</span></div>
       <div class="scroll" id="feed"></div>
     </div>
     <div class="panel"><h2>Open agent positions</h2><div class="scroll" id="agentOpen"></div></div>
@@ -273,14 +273,16 @@ function calibration(cal) {
 
 
 // ---------------- v2 agent tab ----------------
-const edgeCls = e => { const a = Math.abs(e); return a >= .15 ? "e-hot" : a > .08 ? "e-ok" : a >= .03 ? "e-watch" : "e-low"; };
+// Legend tiers: >= 5% strong, above the threshold (1.5%) qualifies, 0.5-1.5% watching, below 0.5% skip.
+const edgeCls = (e, thr = .015) => { const a = Math.abs(e); return a >= .05 ? "e-hot" : a > thr ? "e-ok" : a >= .005 ? "e-watch" : "e-low"; };
 const pct = (x, d = 1) => x == null ? "–" : (x * 100).toFixed(d) + "%";
+const thrLabel = t => (t * 100).toFixed(1).replace(/\.0$/, "") + "%" + (t < .08 ? " (calibration mode)" : "");
 const spct = x => x == null ? "–" : (x >= 0 ? "+" : "−") + Math.abs(x * 100).toFixed(2) + "%";
 let agentData = null, seenOpp = null, decFilter = "ALL", view = "overview";
 
 function edgeCell(e, thr) {
   const w = Math.min(100, Math.abs(e) / (thr * 2) * 100);
-  return `<div class="edge ${edgeCls(e)}"><span class="bar"><i style="width:${w}%"></i><b style="left:50%"></b></span><span class="v">${spct(e)}</span></div>`;
+  return `<div class="edge ${edgeCls(e, thr)}"><span class="bar"><i style="width:${w}%"></i><b style="left:50%"></b></span><span class="v">${spct(e)}</span></div>`;
 }
 
 function renderAgent(a) {
@@ -299,8 +301,8 @@ function renderAgent(a) {
   const items = [
     ["Agent equity", usd(s.equity), `${usd(pnl, true)} vs. ${usd(s.starting_bankroll)} start (paper)`, cls(pnl)],
     ["Cash", usd(s.cash), `${s.open_count} / ${a.config.max_positions} positions open`, ""],
-    ["Opportunities now", String(lr.opportunities ?? qual), `of ${(lr.eligible ?? 0).toLocaleString()} eligible markets (edge > ${pct(thr, 0)})`, qual ? "pos" : ""],
-    ["Largest edge seen", top == null ? "–" : pct(top, 2), `threshold is ${pct(thr, 0)}`, ""],
+    ["Opportunities now", String(lr.opportunities ?? qual), `of ${(lr.eligible ?? 0).toLocaleString()} eligible markets (edge > ${thrLabel(thr)})`, qual ? "pos" : ""],
+    ["Largest edge seen", top == null ? "–" : pct(top, 2), `threshold is ${thrLabel(thr)}`, ""],
     ["Decisions logged", String(s.decisions), `${s.opened_total} positions opened, all time`, ""],
   ];
   $("agentKpis").innerHTML = items.map(([l, v, n, c], i) => `<div class="card in" style="--i:${i}"><div class="label">${l}</div><div class="big ${c}">${v}</div><div class="note">${n}</div></div>`).join("");
@@ -310,22 +312,22 @@ function renderAgent(a) {
   const fresh = seenOpp ? new Set([...nowQ].filter(id => !seenOpp.has(id))) : new Set();
   seenOpp = nowQ;
   $("feedNote").textContent = feed.length ? `· top ${feed.length} by |edge|, scanned ${ago(feed[0].scanned_at)}` : "";
-  $("feed").innerHTML = feed.length ? `<table><thead><tr><th>Market</th><th>Category</th><th>Market</th><th>Model</th><th>Edge (line = ${pct(thr, 0)})</th></tr></thead><tbody>` +
+  $("feed").innerHTML = feed.length ? `<table><thead><tr><th>Market</th><th>Category</th><th>Market</th><th>Model</th><th>Edge (line = ${pct(thr, 1)})</th></tr></thead><tbody>` +
     feed.map(f => `<tr class="${fresh.has(f.market_id) ? "pulse" : ""}"><td title="${esc(f.question)}">${esc(f.question)}</td><td><span class="tag cat">${esc(f.category)}</span></td><td>${pct(f.market_prob)}</td><td>${pct(f.estimated_prob)}</td><td>${edgeCell(f.edge, thr)}</td></tr>`).join("") + `</tbody></table>
-    <div class="cfg">Edge = model probability − market probability. The model is deliberately conservative (calibration prior + 24h momentum, shrunk toward the market), so edges above <b>${pct(thr, 0)}</b> are rare. An empty opportunity list is the expected result in an efficient market.</div>`
+    <div class="cfg">Edge = model probability − market probability. The model is deliberately conservative (calibration prior + 24h momentum, shrunk toward the market), so sizeable edges are rare. The qualifying line is <b>${thrLabel(thr)}</b>: a deliberately low paper-trading threshold while the model calibrates, to be raised to 8% once 50+ forecasts have resolved and trust is above 0.85.</div>`
     : `<div class="empty">No eligible markets in the last scan.</div>`;
 
   const pos = a.positions || [];
   $("agentOpen").innerHTML = pos.length ? `<table><thead><tr><th>Market</th><th>Side</th><th>Entry</th><th>Now</th><th>Market → model</th><th>Edge</th><th>Stake</th><th>Unrealized</th></tr></thead><tbody>` +
     pos.map(p => `<tr><td title="${esc(p.question)}">${esc(p.question)}</td><td>${esc(p.side)}</td><td>${cents(p.entry_price)}</td><td>${cents(p.current_price)}</td><td>${pct(p.market_prob)} → ${pct(p.estimated_prob)}</td><td>${edgeCell(p.edge, thr)}</td><td>${usd(p.stake)}</td><td class="${cls(p.unrealized_pnl)}">${usd(p.unrealized_pnl, true)}</td></tr>`).join("") + `</tbody></table>`
-    : `<div class="empty">No open agent positions. The agent only trades when the edge clears ${pct(thr, 0)} after the spread.</div>`;
+    : `<div class="empty">No open agent positions. The agent only trades when the edge clears ${thrLabel(thr)} after the spread.</div>`;
 
   const decs = (a.decisions || []).filter(d => decFilter === "ALL" || d.action_taken === decFilter);
   $("decTabs").innerHTML = ["ALL", "OPEN", "SKIP"].map(k => `<button class="${k === decFilter ? "on" : ""}" data-f="${k}">${k === "ALL" ? "All" : k === "OPEN" ? "Opened" : "Skipped"}</button>`).join("");
   $("decTabs").querySelectorAll("button").forEach(b => b.onclick = () => { decFilter = b.dataset.f; renderAgent(agentData); });
   $("decisions").innerHTML = decs.length ? `<table><thead><tr><th>When</th><th>Market</th><th>Market</th><th>Model</th><th>Edge</th><th>Stake</th><th>Action</th><th>Reason</th></tr></thead><tbody>` +
     decs.map(d => `<tr><td class="dim">${when(d.timestamp)}</td><td title="${esc(d.question)}">${esc(d.question)}</td><td>${pct(d.market_prob)}</td><td>${pct(d.estimated_prob)}</td><td>${edgeCell(d.edge, thr)}</td><td>${d.kelly_stake ? usd(d.kelly_stake) : "–"}</td><td><span class="tag ${d.action_taken === "OPEN" ? "open" : "skip"}">${esc(d.action_taken)}</span></td><td class="dim" style="text-align:left">${esc(d.reason)}</td></tr>`).join("") + `</tbody></table>`
-    : `<div class="empty">No decisions logged yet. A decision is logged whenever a market clears the ${pct(thr, 0)} edge filter.</div>`;
+    : `<div class="empty">No decisions logged yet. A decision is logged whenever a market clears the ${thrLabel(thr)} edge filter.</div>`;
 
   const perf = a.performance || [], pri = Object.fromEntries((a.priors || []).map(p => [p.category, p]));
   const byCat = Object.fromEntries(perf.map(p => [p.category, p]));

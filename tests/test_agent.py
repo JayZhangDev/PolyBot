@@ -61,8 +61,23 @@ def test_stake_is_half_kelly():
 
 
 def test_stake_is_capped_at_six_percent_of_bankroll():
-    assert stake_for(0.9, 0.3, 1000.0) == pytest.approx(60.0)     # raw half-Kelly ~42% -> capped
-    assert stake_for(0.9, 0.3, 500.0) == pytest.approx(30.0)
+    assert stake_for(0.9, 0.3, 500.0) == pytest.approx(30.0)      # raw half-Kelly ~42% -> 6% of $500
+    assert stake_for(0.9, 0.3, 800.0, Params(max_stake=1000)) == pytest.approx(48.0)
+
+
+def test_stake_is_capped_at_fifty_dollars():
+    assert stake_for(0.9, 0.3, 1000.0) == pytest.approx(50.0)     # 6% of $1000 is $60, the $50 cap binds
+    assert stake_for(0.9, 0.3, 100_000.0) == pytest.approx(50.0)
+
+
+def test_stake_below_minimum_is_skipped_not_rounded_up():
+    v, e = opp(0.30, 0.45, ask=0.31, bid=0.29)
+    s = decide(v, e, bankroll=30, cash=30, open_count=0, held_market_ids=set())   # half-Kelly ~ $1.4 < $2
+    assert s.action == "SKIP" and s.reason.startswith("stake_below_minimum")
+
+
+def test_stake_guards_are_two_and_fifty_dollars():
+    assert (Params().min_stake, Params().max_stake) == (2.0, 50.0)
 
 
 def test_stake_cap_follows_params():
@@ -185,8 +200,9 @@ def test_opens_no_when_estimate_below_market():
 
 def test_skips_at_position_limit():
     v, e = opp()
-    s = decide(v, e, bankroll=1000, cash=1000, open_count=10, held_market_ids=set())
+    s = decide(v, e, bankroll=1000, cash=1000, open_count=25, held_market_ids=set())
     assert s.action == "SKIP" and "max_positions" in s.reason
+    assert decide(v, e, bankroll=1000, cash=1000, open_count=24, held_market_ids=set()).action == "OPEN"
 
 
 def test_skips_already_held_market():
@@ -222,9 +238,10 @@ def test_cycle_with_no_edge_opens_nothing_and_logs_run():
         assert c.execute("SELECT COUNT(*) FROM agent_scan").fetchone()[0] == 2
 
 
-def test_default_threshold_is_eight_points():
-    assert Params().min_edge == 0.08
-    assert Params().max_stake_fraction == 0.06 and Params().max_positions == 10
+def test_default_threshold_is_calibration_mode():
+    # Paper-trading calibration phase; raise to 0.08 once 50+ forecasts resolved and trust > 0.85.
+    assert Params().min_edge == 0.015
+    assert Params().max_stake_fraction == 0.06 and Params().max_positions == 25
 
 
 def test_cycle_opens_and_logs_decision_and_position():
@@ -254,11 +271,11 @@ def test_repeat_skip_is_not_relogged_within_window():
         assert c.execute("SELECT COUNT(*) FROM agent_decisions").fetchone()[0] == 1
 
 
-def test_position_limit_of_ten_is_enforced():
-    markets = [liquid(str(i), 0.10, ask=0.101, bid=0.099) for i in range(15)]
-    assert agent.run_cycle(markets, params=LOW, now=NOW)["opened"] == 10
+def test_position_limit_of_twenty_five_is_enforced():
+    markets = [liquid(str(i), 0.10, ask=0.101, bid=0.099) for i in range(30)]
+    assert agent.run_cycle(markets, params=LOW, now=NOW)["opened"] == 25
     with connect() as c:
-        assert c.execute("SELECT COUNT(*) FROM agent_positions WHERE status = 'OPEN'").fetchone()[0] == 10
+        assert c.execute("SELECT COUNT(*) FROM agent_positions WHERE status = 'OPEN'").fetchone()[0] == 25
 
 
 def test_stake_never_exceeds_six_percent_cap():
