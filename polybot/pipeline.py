@@ -1,16 +1,20 @@
 """Hourly cycle: snapshot Polymarket, refresh held markets, record resolutions, paper trade."""
+
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from polybot.fetch import fetch_active_markets, fetch_markets_by_id
+from polybot.jobs import run_job
 from polybot.paper_trader import run as run_trader
 from polybot.portfolio import open_market_ids
 from polybot.resolutions import record_resolutions, sweep
 from polybot.storage import counts, save_snapshot
 
 ACTIVE_MARKET_LIMIT = 500
+LOCK_WAIT_SECONDS = 600  # the agent's cycle takes a few minutes; wait for it instead of skipping the hour
+
+log = logging.getLogger("polybot.pipeline")
 
 
 def refresh_held_markets(fetched_ids: set[str]) -> int:
@@ -28,30 +32,43 @@ def refresh_held_markets(fetched_ids: set[str]) -> int:
     return save_snapshot(markets)
 
 
-def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    print(f"\n=== PolyBot pipeline — {datetime.now(timezone.utc).isoformat()} ===\n")
-
-    print("→ Fetching Polymarket markets...")
+def run_once() -> str:
+    """One full cycle. Returns a one-line summary for the log and the job_runs table."""
     markets = fetch_active_markets(limit=ACTIVE_MARKET_LIMIT)
     saved = save_snapshot(markets)
     refreshed = refresh_held_markets({str(m.get("id")) for m in markets})
     stats = counts()
-    print(f"  Saved {saved} snapshots (+{refreshed} held markets refreshed). "
-          f"DB totals: {stats['markets']} markets, {stats['snapshots']} snapshots.")
+    log.info(
+        "Saved %d snapshots (+%d held markets refreshed). DB totals: %d markets, %d snapshots.",
+        saved,
+        refreshed,
+        stats["markets"],
+        stats["snapshots"],
+    )
 
-    print("\n→ Checking for resolved markets...")
     swept = sweep()
-    print(f"  Checked {swept['checked']} ended or dropped markets, {swept['resolved']} newly resolved.")
+    log.info("Checked %d ended or dropped markets, %d newly resolved.", swept["checked"], swept["resolved"])
 
-    print("\n→ Running paper-trader...")
     result = run_trader()
     s = result["summary"]
-    print(f"  Opened: {result['opened']}   Closed: {result['closed']}")
-    print(f"  Bankroll: ${s['bankroll']:.2f}   Open: {s['open_positions']}   "
-          f"Realized P&L: ${s['realized_pnl']:.2f}")
-    print("\n=== Pipeline complete ===\n")
+    log.info(
+        "Paper trader: opened %d, closed %d. Bankroll $%.2f, %d open, realized P&L $%.2f.",
+        result["opened"],
+        result["closed"],
+        s["bankroll"],
+        s["open_positions"],
+        s["realized_pnl"],
+    )
+    return (
+        f"{saved + refreshed} snapshots, {swept['resolved']} newly resolved, "
+        f"opened {result['opened']}, closed {result['closed']}"
+    )
+
+
+def main() -> int:
+    """Entry point for the hourly scheduled task. Returns the process exit code."""
+    return run_job("pipeline", run_once, wait_seconds=LOCK_WAIT_SECONDS)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

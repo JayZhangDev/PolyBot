@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def load_fixture(name: str):
+    """A saved, real Gamma API response from tests/fixtures (so tests need no network)."""
+    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
 
 
 @pytest.fixture(autouse=True)
@@ -11,7 +20,13 @@ def temp_db(tmp_path, monkeypatch):
     """Every test gets its own empty database; the real polybot.db is never touched."""
     path = tmp_path / "test.db"
     monkeypatch.setenv("POLYBOT_DB", str(path))
-    return path
+    monkeypatch.setenv("POLYBOT_LOG_DIR", str(tmp_path / "logs"))  # tests never write to the real log
+    yield path
+    # Close any log file a test opened, so the temporary folder can be deleted afterwards.
+    root = logging.getLogger()
+    for handler in [h for h in root.handlers if getattr(h, "polybot_handler", False)]:
+        root.removeHandler(handler)
+        handler.close()
 
 
 def make_market(mid: str = "1", *, yes: float = 0.5, bid: float | None = None,

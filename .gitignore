@@ -13,5 +13,8 @@ launchd.*.log
 build/
 agent.log
 pipeline.log
+logs/
+*.db.lock
+*.db.lock.stale.*
 paper_pnl.txt
 paper_pnl.txt.tmp

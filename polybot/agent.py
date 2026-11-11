@@ -38,6 +38,7 @@ from datetime import datetime, timedelta, timezone
 from polybot.calibration import forecasts
 from polybot.db import connect
 from polybot.fetch import fetch_active_markets, fetch_markets_by_id
+from polybot.jobs import INTERRUPTED, run_job
 from polybot.pricing import entry_price
 from polybot.resolutions import record_resolutions
 from polybot.storage import _parse_yes_no_prices, init_db, save_snapshot
@@ -71,6 +72,8 @@ NEUTRAL_TRUST = 0.7              # category trust before there is any evidence
 MIN_TRUST, MAX_TRUST = 0.3, 1.0
 SKIP_RELOG_HOURS = 6             # do not repeat the same skip for a market more often than this
 SCAN_RETENTION_HOURS = 24
+LOCK_WAIT_SECONDS = 180          # wait this long for the hourly pipeline; the task is killed after 9 minutes
+STALE_RUN_MINUTES = 15           # a run still marked 'running' after this long was killed mid-cycle
 
 CATEGORIES = ("politics", "crypto", "sports", "science", "other")
 _KEYWORDS: dict[str, tuple[str, ...]] = {
@@ -510,8 +513,7 @@ def decide(view: MarketView, est: Estimate, *, bankroll: float, cash: float, ope
         return Sizing("SKIP", f"max_positions_reached ({params.max_positions})")
 
     side = "YES" if est.edge > 0 else "NO"
-    no_mid = 1.0 - view.yes_price
-    price = entry_price(side, view.yes_price, no_mid, view.best_bid, view.best_ask)
+    price = entry_price(side, view.best_bid, view.best_ask)
     if price is None:
         return Sizing("SKIP", "no_executable_price", side=side)
     win_prob = est.estimated_prob if side == "YES" else 1.0 - est.estimated_prob
@@ -752,6 +754,7 @@ def run_cycle(markets: list[dict] | None = None, params: Params | None = None, n
     now = now or datetime.now(timezone.utc)
     init_agent_tables()
     with connect() as c:
+        _close_stale_runs(c, now)
         run_id = int(c.execute("INSERT INTO agent_runs (started_at, status) VALUES (?, 'running')",
                                (_now_iso(now),)).lastrowid)
     summary = {"run_id": run_id, "scanned": 0, "eligible": 0, "opportunities": 0, "opened": 0,
@@ -767,10 +770,16 @@ def run_cycle(markets: list[dict] | None = None, params: Params | None = None, n
         _execute(pairs, params, now, run_id, summary)
         _finish_run(run_id, "success", summary, None, now)
     except Exception as exc:
-        log.exception("Agent cycle failed")
         _finish_run(run_id, "failed", summary, str(exc), now)
-        raise
+        raise  # run_job logs the traceback and records the failure
     return summary
+
+
+def _close_stale_runs(c: sqlite3.Connection, now: datetime) -> None:
+    """Mark runs that never finished as failed, so a killed cycle does not look busy forever."""
+    cutoff = (now - timedelta(minutes=STALE_RUN_MINUTES)).isoformat()
+    c.execute("UPDATE agent_runs SET status = 'failed', finished_at = ?, error = ? "
+              "WHERE status = 'running' AND started_at < ?", (_now_iso(now), INTERRUPTED, cutoff))
 
 
 def _execute(pairs: list[tuple[MarketView, Estimate]], params: Params, now: datetime, run_id: int,
@@ -878,23 +887,25 @@ def export_state(c: sqlite3.Connection, limit_decisions: int = 150) -> dict:
     }
 
 
-def main() -> None:
-    """CLI entry point: run one cycle (what the 10-minute scheduled task calls)."""
+def summary_line(s: dict, min_edge: float) -> str:
+    """One line describing a finished cycle, for the log and the job_runs table."""
+    return (f"parsed {s['scanned']} markets, {s['eligible']} eligible, "
+            f"{s['opportunities']} opportunities (|edge| > {min_edge:.1%}), "
+            f"opened {s['opened']}, skipped {s['skipped']}, settled {s['settled']}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point: run one cycle (what the 10-minute scheduled task calls). Returns the exit code."""
     parser = argparse.ArgumentParser(description="PolyBot v2 autonomous paper-trading agent (one cycle).")
     parser.add_argument("--min-edge", type=float, default=MIN_EDGE, help="Edge threshold (default 0.015)")
-    args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    print(f"\n=== PolyBot agent — {datetime.now(timezone.utc).isoformat()} ===")
-    s = run_cycle(params=Params(min_edge=args.min_edge))
-    print(f"  Parsed {s['scanned']} markets, {s['eligible']} eligible "
-          f"(>${MIN_LIQUIDITY:,.0f} liquidity, >{MIN_DAYS_LEFT:.0f}d).")
-    print(f"  Opportunities (|edge| > {args.min_edge:.0%}): {s['opportunities']}   "
-          f"Opened: {s['opened']}   Skipped: {s['skipped']}   Settled: {s['settled']}")
-    print("=== Agent cycle complete ===\n")
+    args = parser.parse_args(argv)
+    params = Params(min_edge=args.min_edge)
+    return run_job("agent", lambda: summary_line(run_cycle(params=params), params.min_edge),
+                   wait_seconds=LOCK_WAIT_SECONDS)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
 
 
 __all__ = ["Params", "MarketView", "Estimate", "Sizing", "run_cycle", "kelly_fraction", "stake_for",

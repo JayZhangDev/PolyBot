@@ -7,7 +7,7 @@ from polybot.storage import save_snapshot
 
 def test_resolution_is_detected_after_market_leaves_active_listing(monkeypatch):
     # Cycle 1: market is active, a position opens.
-    save_snapshot([make_market("42", yes=0.10)])
+    save_snapshot([make_market("42", yes=0.10, bid=0.09, ask=0.11)])
     paper_trader.run()
     assert summary()["open_positions"] == 1
 

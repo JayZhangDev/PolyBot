@@ -57,7 +57,7 @@ def _valid_time_window(end_str: str | None, min_days: int, max_days: int) -> boo
 
 
 def _signal(row, strategy: str, side: str, reason: str) -> dict | None:
-    price = entry_price(side, row["yes_price"], row["no_price"], row["best_bid"], row["best_ask"])
+    price = entry_price(side, row["best_bid"], row["best_ask"])
     if price is None:
         return None
     return {
@@ -178,10 +178,8 @@ def mispricing_candidates() -> list[dict]:
         if len(legs) < MISMATCH_MIN_LEGS:
             continue
         n = len(legs)
-        yes_cost = [entry_price("YES", r["yes_price"], r["no_price"], r["best_bid"], r["best_ask"])
-                    for r in legs]
-        no_cost = [entry_price("NO", r["yes_price"], r["no_price"], r["best_bid"], r["best_ask"])
-                   for r in legs]
+        yes_cost = [entry_price("YES", r["best_bid"], r["best_ask"]) for r in legs]
+        no_cost = [entry_price("NO", r["best_bid"], r["best_ask"]) for r in legs]
         mid_sum = sum(r["yes_price"] for r in legs)
         yes_edge = 1.0 - sum(yes_cost) if None not in yes_cost else None
         no_edge = (n - 1) - sum(no_cost) if None not in no_cost else None

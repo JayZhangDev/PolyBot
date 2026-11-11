@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polybot"
-version = "2.0.0"
+version = "2.1.0"
 description = "Polymarket data pipeline, calibration tracker and autonomous paper-trading agent"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -19,6 +19,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.5"]
+
+[project.scripts]
+polybot = "polybot.cli:main"
 
 [project.urls]
 Repository = "https://github.com/JayZhangDev/PolyBot"

@@ -199,7 +199,7 @@ def test_opens_no_when_estimate_below_market():
 
 
 def test_skips_at_position_limit():
-    v, e = opp()
+    v, e = opp(ask=0.31, bid=0.29)
     s = decide(v, e, bankroll=1000, cash=1000, open_count=25, held_market_ids=set())
     assert s.action == "SKIP" and "max_positions" in s.reason
     assert decide(v, e, bankroll=1000, cash=1000, open_count=24, held_market_ids=set()).action == "OPEN"
@@ -363,3 +363,28 @@ def test_export_state_before_first_run():
     init_db()
     with connect() as c:
         assert agent.export_state(c) == {"enabled": False}
+
+
+# --------------------------- Phase 1 hardening ---------------------------
+
+def test_no_side_is_skipped_when_nobody_is_bidding():
+    v, e = opp(0.30, 0.15, ask=0.31)          # the estimate says buy NO, but there is no bid to fill against
+    s = decide(v, e, bankroll=1000, cash=1000, open_count=0, held_market_ids=set())
+    assert s.action == "SKIP" and s.reason == "no_executable_price"
+
+
+def test_run_killed_mid_cycle_is_marked_failed_by_the_next_cycle():
+    agent.init_agent_tables()
+    with connect() as c:
+        c.execute("INSERT INTO agent_runs (started_at, status) VALUES (?, 'running')",
+                  ((NOW - timedelta(hours=2)).isoformat(),))
+    agent.run_cycle([], now=NOW)
+    with connect() as c:
+        killed, latest = c.execute("SELECT status, error FROM agent_runs ORDER BY id").fetchall()
+    assert killed["status"] == "failed" and "interrupted" in killed["error"]
+    assert latest["status"] == "success"
+
+
+def test_summary_line_shows_the_threshold_without_rounding_it_up():
+    s = {"scanned": 2000, "eligible": 1500, "opportunities": 30, "opened": 0, "skipped": 1, "settled": 0}
+    assert "|edge| > 1.5%" in agent.summary_line(s, 0.015)

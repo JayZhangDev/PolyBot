@@ -1,3 +1,3 @@
-"""PolyBot: Polymarket data pipeline, paper trader and (soon) calibration tracker."""
+"""PolyBot: Polymarket data pipeline, calibration tracker and paper-trading agent."""
 
-__version__ = "0.2.0"
+__version__ = "2.1.0"

@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
-import re
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -25,6 +25,11 @@ sys.path.insert(0, str(ROOT))
 from polybot.agent import export_state as agent_state  # noqa: E402
 from polybot.calibration import HORIZONS_DAYS, report  # noqa: E402
 from polybot.db import db_path  # noqa: E402
+from polybot.jobs import LockTimeout, job_lock  # noqa: E402
+from polybot.logsetup import setup_logging  # noqa: E402
+
+LOCK_WAIT_SECONDS = 120
+log = logging.getLogger("polybot.export")
 
 
 def _rows(c: sqlite3.Connection, sql: str, args: tuple = ()) -> list[dict]:
@@ -79,15 +84,13 @@ def resolved(c: sqlite3.Connection) -> list[dict]:
 
 
 def last_run(c: sqlite3.Connection) -> dict:
-    """Last pipeline run: the newest block in pipeline.log, else the newest snapshot."""
-    log = ROOT / "pipeline.log"
-    if log.exists():
-        blocks = re.split(r"(?m)^=== PolyBot pipeline . ", log.read_text(encoding="utf-8", errors="replace"))
-        if len(blocks) > 1:
-            last = blocks[-1]
-            ts = last.split(" ===", 1)[0].strip()
-            ok = "Pipeline complete" in last and not re.search(r"Traceback|Error", last)
-            return {"at": ts, "status": "success" if ok else "failed"}
+    """Last finished pipeline run, from the job_runs table; else the newest snapshot."""
+    has_runs = c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'job_runs'").fetchone()
+    if has_runs:
+        row = c.execute("SELECT started_at, status FROM job_runs "
+                        "WHERE job = 'pipeline' AND status != 'running' ORDER BY id DESC LIMIT 1").fetchone()
+        if row:
+            return {"at": row["started_at"], "status": row["status"]}
     row = c.execute("SELECT MAX(captured_at) FROM snapshots").fetchone()
     return {"at": row[0], "status": "unknown"}
 
@@ -108,12 +111,26 @@ def write_paper_pnl(agent: dict, path: Path = PNL_FILE) -> float | None:
     return pnl
 
 
-def main() -> None:
+def main() -> int:
+    """Export under the job lock, so the files are never built from a half-written database."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(ROOT / "docs" / "data.json"))
     ap.add_argument("--pnl-out", default=str(PNL_FILE))
     args = ap.parse_args()
+    setup_logging()
+    try:
+        with job_lock("export", LOCK_WAIT_SECONDS):
+            export(Path(args.out), Path(args.pnl_out))
+    except LockTimeout as exc:
+        log.warning("Dashboard export skipped: %s", exc)
+    except Exception:
+        log.exception("Dashboard export failed")
+        return 1
+    return 0
 
+
+def export(out: Path, pnl_out: Path) -> None:
+    """Read the database (read-only) and write docs/data.json and paper_pnl.txt."""
     c = sqlite3.connect(f"file:{db_path().as_posix()}?mode=ro", uri=True)
     c.row_factory = sqlite3.Row
 
@@ -151,14 +168,13 @@ def main() -> None:
     c.close()
     data["calibration"] = {str(h): report(h) for h in HORIZONS_DAYS}
 
-    out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    print(f"Wrote {out} ({len(opens)} open, {len(data['resolved'])} resolved)")
-    pnl = write_paper_pnl(data["agent"], Path(args.pnl_out))
+    log.info("Wrote %s (%d open, %d resolved)", out, len(opens), len(data["resolved"]))
+    pnl = write_paper_pnl(data["agent"], pnl_out)
     if pnl is not None:
-        print(f"Wrote {args.pnl_out} (v2 agent paper P&L {pnl:+.2f})")
+        log.info("Wrote %s (v2 agent paper P&L %+.2f)", pnl_out, pnl)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

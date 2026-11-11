@@ -17,6 +17,7 @@ The core question throughout is **how well prediction-market prices forecast out
 | **v0.1.1** | Executable prices (bid/ask), settlement fixes, tests, CI | Honest fills and correct P&L |
 | **v0.2** | Calibration tracker | Measure how well prices predict outcomes (Brier, reliability) |
 | **v2.0** | **Autonomous agent** ([`polybot/agent.py`](polybot/agent.py)) | Every 10 minutes: estimate probability per market, rank by edge, size with half-Kelly under a hard risk cap, log every decision, learn from resolutions |
+| **v2.1** | Hardening: retries, run lock, rotating log, `polybot health` | Ride out API errors, record every run, and show at a glance whether data is still arriving |
 
 The hourly pipeline is unchanged. The agent runs beside it, shares its market, snapshot and resolution tables, and keeps its own positions and bankroll so the two strategies can be compared cleanly. The git history shows each step.
 
@@ -124,15 +125,59 @@ python -m http.server 8765 --directory docs   # open http://localhost:8765/#agen
 
 The export also writes `paper_pnl.txt` (git-ignored): the agent's paper P&L, equity minus its $1,000 start, as one number on one line, for a local desktop wallpaper to read.
 
-### Running the agent every 10 minutes (Windows + WSL)
+### Running it on a schedule (Windows + WSL)
 
-The hourly pipeline runs as a Windows scheduled task that calls into WSL; the agent uses the same setup:
+Both jobs run as Windows scheduled tasks that call into WSL. One script installs them:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\install_agent_task.ps1
+powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
 ```
 
-This registers `PolyBot-Agent` (every 10 minutes, one instance at a time, 9-minute limit), which runs [`scripts/run_agent.sh`](scripts/run_agent.sh): one agent cycle, then a dashboard export. Output goes to `agent.log`.
+| Task | Runs | What it does |
+|---|---|---|
+| `PolyBot-Hourly` | every hour at five past | [`scripts/run_pipeline.sh`](scripts/run_pipeline.sh): one pipeline cycle |
+| `PolyBot-Agent` | every 10 minutes | [`scripts/run_agent.sh`](scripts/run_agent.sh): one agent cycle, then a dashboard export |
+
+**Reloading.** After editing `install_tasks.ps1`, run the same command again; it replaces both tasks. Code changes need no reload, because each run starts a fresh Python process.
+
+```powershell
+Disable-ScheduledTask PolyBot-Hourly, PolyBot-Agent      # pause
+Enable-ScheduledTask  PolyBot-Hourly, PolyBot-Agent      # resume
+Get-ScheduledTask PolyBot-* | Get-ScheduledTaskInfo      # last run time and result
+```
+
+**The PC must be awake and logged in.** The tasks survive a reboot (they start again at login, and a missed run fires straight away), but nothing can run while the PC is asleep or shut down. Every hour of sleep is an hour with no data. Keep it plugged in with sleep turned off, or wait for the always-on option on the roadmap.
+
+### Health, logs and failures
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\health.ps1     # from Windows
+python -m polybot health                                        # from inside WSL, or anywhere the bot runs
+```
+
+Example output (your numbers will differ):
+
+```
+PolyBot health at 2026-11-11 21:40 UTC
+
+Last successful fetch : 2026-11-11 21:34 UTC (6 min ago)  [OK]
+Rows added, last 24h  : 228,333 snapshots across 1,812 markets
+Longest gap, last 24h : 61 min with no data
+
+Runs in the last 24h:
+  agent      143 ok    1 failed   last success 2026-11-11 21:34 UTC
+  pipeline    24 ok    0 failed   last success 2026-11-11 21:06 UTC
+
+Errors in the last 24h:
+  2026-11-11 10:30 UTC  agent     FetchError: https://gamma-api.polymarket.com/markets ... failed after 5 tries: HTTP 500
+```
+
+The command exits with code 1 when the newest snapshot is more than 30 minutes old.
+
+- **Log.** Every run writes timestamped lines to `logs/polybot.log`. The file rotates at about 2 MB and five old files are kept. `logs/task_output.log` only receives output from a run that crashed before logging started.
+- **Retries.** A request that fails with a network error or a 5xx status is retried up to four times, waiting 1s, 2s, 4s then 8s ([`polybot/http.py`](polybot/http.py)). If a later page of the market listing still fails, the pages already loaded are kept.
+- **One job at a time.** The pipeline and the agent share one SQLite file, so a lock file (`polybot.db.lock`) makes the second job wait for the first. A lock older than 12 minutes belongs to a run that was killed and is taken over.
+- **Every run is recorded.** The `job_runs` table holds the start, finish, status and error of each run. A run that crashes is recorded as failed and the next one starts normally.
 
 ## Strategies (v1 pipeline)
 
@@ -163,6 +208,7 @@ python -m polybot.fetch --limit 100   # snapshot only
 python -m polybot.signals             # print current signals and watchlist
 python -m polybot.portfolio           # print bankroll summary
 python -m polybot.resolutions         # one resolution sweep (--backfill for all)
+python -m polybot health              # last fetch, rows added in 24 hours, recent errors
 ```
 
 **Upgrading an existing database?** Run `python -m polybot.resolutions --backfill` once. It checks every market that has already ended, rather than 50 per hour.
@@ -171,7 +217,7 @@ The database lives at `polybot.db` in the project root. Set `POLYBOT_DB=/path/to
 
 ### Running it hourly (macOS)
 
-Save as `~/Library/LaunchAgents/com.jayzhang.polybot.plist`, replacing the paths, then `launchctl load` it:
+Save as `~/Library/LaunchAgents/com.jayzhang.polybot.plist`, replacing the paths. `RunAtLoad` starts it at login, so it survives a reboot. The Mac must be awake: launchd does not run jobs during sleep.
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -186,10 +232,19 @@ Save as `~/Library/LaunchAgents/com.jayzhang.polybot.plist`, replacing the paths
   </array>
   <key>WorkingDirectory</key><string>/path/to/PolyBot</string>
   <key>StartInterval</key><integer>3600</integer>
+  <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>/path/to/PolyBot/launchd.out.log</string>
   <key>StandardErrorPath</key><string>/path/to/PolyBot/launchd.err.log</string>
 </dict>
 </plist>
+```
+
+Load it, and reload it after any edit to the file:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.jayzhang.polybot.plist 2>/dev/null
+launchctl load -w ~/Library/LaunchAgents/com.jayzhang.polybot.plist
+launchctl list | grep polybot      # second column is the last exit code; 0 means the last run was fine
 ```
 
 On Linux, a cron line does the same: `0 * * * * cd /path/to/PolyBot && .venv/bin/python -m polybot.pipeline`.
@@ -199,6 +254,7 @@ On Linux, a cron line does the same: `0 * * * * cd /path/to/PolyBot && .venv/bin
 ```
 polybot/
   db.py            database location and connections
+  http.py          GET with retries and exponential backoff
   fetch.py         Gamma API client (active markets, markets by ID)
   storage.py       schema, migrations, snapshot persistence
   pricing.py       executable entry prices from bid/ask
@@ -210,16 +266,22 @@ polybot/
   paper_trader.py  resolution, settlement and order placement
   pipeline.py      the hourly cycle (v1, unchanged)
   agent.py         the 10-minute autonomous agent (v2)
+  jobs.py          job lock and the job_runs record of every scheduled run
+  logsetup.py      rotating log file with UTC timestamps
+  health.py        the `polybot health` report
+  cli.py           the `polybot` command
   app.py           Streamlit dashboard
-scripts/           dashboard export, agent runner and scheduler installer
-tests/             pytest suite (runs against a temporary database)
+scripts/           dashboard export, job runners, scheduler installer, health check
+tests/             pytest suite (temporary database, no network)
+tests/fixtures/    real Gamma API responses saved for the parser tests
 ```
 
 ## Testing
 
 ```bash
-pytest          # 99 tests: pricing, storage, signals, settlement, resolutions, calibration,
-                # and the agent (Kelly sizing, estimator, risk rules, settlement, learning)
+pytest          # 162 tests: pricing, storage, signals, settlement, resolutions, calibration,
+                # the agent (Kelly sizing, estimator, risk rules, settlement, learning),
+                # retries, the job lock, health, and parsers against saved API responses
 ruff check .
 ```
 
@@ -232,12 +294,13 @@ CI runs both on every push and pull request, on Python 3.10 and 3.12.
 - [x] **v0.1.1** Resolution fix for closed markets, bid/ask fills, longshot fade, tests and CI
 - [x] **v0.2** Calibration tracker: resolution sweep, Brier and skill scores, reliability curve, longshot check
 - [x] **v2.0** Autonomous agent: probability ensemble, 8% edge filter, half-Kelly with 6% cap, decision audit log, learning loop, Agent tab
+- [x] **v2.1** Hardening: retries with backoff, job lock, run records, rotating log, `polybot health`
 - [ ] **v0.3** Strategy scorecard: P&L, max drawdown and Brier score per strategy, compared with the market baseline
 - [ ] **v0.4** Full-event fetching and a basket executor for neg-risk mispricings
 
 ## Limitations
 
-- **Paper only.** No orders are sent anywhere, and fills assume the full stake executes at the top of book.
+- **Paper only.** No orders are sent anywhere, and fills assume the full stake executes at the top of book. A trade is skipped when the side it needs has no quote; nothing is ever filled at the midpoint.
 - **Fees are not modelled.** Taker fees would reduce P&L further.
 - **Sample size.** Calibration needs hundreds of resolved markets per horizon before buckets are meaningful; early numbers are noisy.
 - **Hourly resolution (v1).** Moves inside the hour are invisible to the pipeline, and its momentum signal compares snapshots about 20 to 24 hours apart.
