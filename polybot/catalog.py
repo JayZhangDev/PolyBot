@@ -45,6 +45,7 @@ class MarketMeta:
     volume_24h: float
     liquidity: float  # dollars of resting orders
     accepting_orders: bool
+    fee_rate: float | None = None  # the market's own taker fee rate, when the API gave one (not stored)
 
 
 def init_catalog_table() -> None:

@@ -203,3 +203,23 @@ def test_job_publishes_the_selection_for_the_streamer(monkeypatch):
     assert [m.market_id for m in selection] == ["3", "1"]  # highest volume first; "2" cannot be streamed
     assert (selection[0].yes_token, selection[0].no_token, selection[0].category) == ("31", "32", "politics")
     assert rawstore.read_json(rawstore.selection_path())["updated_at"]
+
+
+# --------------------------- fee rates and the fuller selection file ---------------------------
+
+
+def test_fee_rate_comes_from_the_markets_own_schedule():
+    assert parse_market(raw("1", feesEnabled=True, feeSchedule={"rate": 0.04, "exponent": 1})).fee_rate == 0.04
+    assert parse_market(raw("2", feesEnabled=False)).fee_rate == 0.0  # fees switched off for this market
+    assert parse_market(raw("3")).fee_rate is None  # the API did not say
+    assert parse_market(raw("4", feesEnabled=True, feeSchedule={"rate": "bad"})).fee_rate is None
+
+
+def test_selection_file_carries_what_the_paper_job_needs(monkeypatch):
+    from polybot import rawstore
+
+    serve(monkeypatch, [{"markets": [raw("1", feesEnabled=True, feeSchedule={"rate": 0.07}), raw("2")]}])
+    assert discovery.main() == 0
+    first, second = rawstore.read_json(rawstore.selection_path())["markets"]
+    assert (first["market_id"], first["fee_rate"], first["end_date"]) == ("1", 0.07, "2027-01-01T00:00:00Z")
+    assert (first["volume"], first["liquidity"]) == (123456.5, 20000.25) and second["fee_rate"] is None

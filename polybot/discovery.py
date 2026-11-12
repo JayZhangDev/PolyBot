@@ -73,7 +73,20 @@ def parse_market(market: dict) -> MarketMeta | None:
         volume_24h=_number(market.get("volume24hr")),
         liquidity=_number(market.get("liquidityNum") or market.get("liquidity")),
         accepting_orders=bool(market.get("acceptingOrders")),
+        fee_rate=_fee_rate(market),
     )
+
+
+def _fee_rate(market: dict) -> float | None:
+    """The market's taker fee rate: 0 when fees are switched off, None when the API did not say."""
+    if market.get("feesEnabled") is False:
+        return 0.0
+    schedule = market.get("feeSchedule")
+    rate = schedule.get("rate") if isinstance(schedule, dict) else None
+    try:
+        return float(rate) if rate is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _page_params(settings: Settings, cursor: str | None) -> dict:
@@ -116,12 +129,14 @@ def fetch_open_markets(settings: Settings) -> list[MarketMeta]:
     return metas
 
 
-def write_selection(selected: list[MarketMeta]) -> None:
-    """Publish the chosen markets in a small file for the streamer.
+def write_selection(selected: list[MarketMeta], fee_rates: dict[str, float | None] | None = None) -> None:
+    """Publish the chosen markets in a small file for the streamer and the paper job.
 
-    The streamer reads this file instead of the database, so it never has to
-    wait for (or collide with) a job that is writing there.
+    Both read this file instead of the database, so neither has to wait for
+    (or collide with) a job that is writing there. ``fee_rates`` are the
+    rates just downloaded, by market ID; the catalog itself does not keep them.
     """
+    fee_rates = fee_rates or {}
     markets = [
         {
             "market_id": m.market_id,
@@ -129,6 +144,10 @@ def write_selection(selected: list[MarketMeta]) -> None:
             "category": m.category,
             "yes_token": m.token_ids[0],
             "no_token": m.token_ids[1],
+            "end_date": m.end_date,
+            "volume": m.volume,
+            "liquidity": m.liquidity,
+            "fee_rate": fee_rates.get(m.market_id),
         }
         for m in selected
     ]
@@ -147,7 +166,7 @@ def _store(downloaded: tuple[Settings, list[MarketMeta]]) -> str:
     settings, metas = downloaded
     counts = save_catalog(metas)
     selected = select_stream_markets(settings)
-    write_selection(selected)
+    write_selection(selected, {m.market_id: m.fee_rate for m in metas})
     return (
         f"listed {counts['listed']} open markets ({counts['new']} new), "
         f"{len(selected)} selected for streaming (max {settings.max_stream_markets})"

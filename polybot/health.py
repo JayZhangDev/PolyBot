@@ -106,7 +106,27 @@ def collect(now: datetime | None = None) -> dict:
     report["stream"] = stream_report(now)
     report["disk"] = disk_report()
     report["calibration"] = rawstore.read_json(rawstore.reports_dir() / "calibration.json")
+    report["paper"] = paper_report(now)
     return report
+
+
+def paper_report(now: datetime) -> dict | None:
+    """The PAPER account's numbers, or None if the paper job has never run.
+
+    The ledger is opened read-only: looking at the account must never change it.
+    """
+    from polybot import ledger
+
+    path = ledger.ledger_path()
+    if not path.exists():
+        return None
+    c = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=10)
+    c.row_factory = sqlite3.Row
+    try:
+        last = ledger.last_run(c)
+        return {**ledger.stats(c, now), "last_run": dict(last) if last else None}
+    finally:
+        c.close()
 
 
 def disk_report(days: int = DISK_DAYS_SHOWN) -> dict:
@@ -185,6 +205,7 @@ def format_report(r: dict) -> str:
     lines += ["", *_stream_lines(r.get("stream"))]
     lines += ["", *_disk_lines(r["disk"])]
     lines += ["", *_calibration_lines(r.get("calibration"))]
+    lines += ["", *_paper_lines(r.get("paper"))]
     lines += [
         "",
         f"Database   : {db_path()}",
@@ -206,6 +227,22 @@ def _calibration_lines(summary: dict | None) -> list[str]:
         detail = f"market Brier {score:.4f} on {markets} markets" if score is not None else "no resolved markets yet"
         lines.append(f"  {name}: {detail}")
     return lines
+
+
+def _paper_lines(p: dict | None) -> list[str]:
+    """The "PAPER account" block."""
+    if p is None:
+        return ["PAPER account: not started (run `polybot paper`)"]
+    win_rate = "n/a" if p["win_rate"] is None else f"{p['win_rate']:.0%}"
+    last = p["last_run"]
+    ran = "never finished a run" if last is None else f"{_when(last['finished_at'])}, {last['status']}"
+    return [
+        "PAPER account (fake money; no real orders):",
+        f"  Equity     : ${p['equity']:,.2f}  PnL {p['pnl_total']:+,.2f} total, {p['pnl_today']:+,.2f} today",
+        f"  Positions  : {p['open_positions']} open, {p['closed_positions']} closed, win rate {win_rate}, "
+        f"max drawdown {p['max_drawdown']:.1%}",
+        f"  Last run   : {ran}",
+    ]
 
 
 def _megabytes(size: int) -> str:

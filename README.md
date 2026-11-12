@@ -22,6 +22,7 @@ The core question throughout is **how well prediction-market prices forecast out
 | **v2.3** | Live websocket recorder ([`polybot/streamer.py`](polybot/streamer.py)) | Record order books and every trade for the selected markets as they happen |
 | **v2.4** | Warehouse: Parquet files queried with DuckDB, daily rollup | Keep months of live data small, and answer questions over all of it in well under a second |
 | **v2.5** | Calibration tracker, `models/` folder, report with charts | Score the market's prices by horizon and category, and score any model against the market |
+| **v2.6** | PAPER ledger: fills at the recorded bid and ask, depth, fees, status file | Trade a model's opinions with fake money as honestly as the recorded books allow |
 
 The hourly pipeline is unchanged. The agent runs beside it, shares its market, snapshot and resolution tables, and keeps its own positions and bankroll so the two strategies can be compared cleanly. The git history shows each step.
 
@@ -154,7 +155,7 @@ The export also writes `paper_pnl.txt` (git-ignored): the agent's paper P&L, equ
 
 ### Running it on a schedule (Windows + WSL)
 
-The five jobs run as Windows scheduled tasks that call into WSL. One script installs them:
+The six jobs run as Windows scheduled tasks that call into WSL. One script installs them:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
@@ -168,8 +169,9 @@ powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
 | `PolyBot-Stream` | all the time | [`scripts/run_stream.sh`](scripts/run_stream.sh): the live recorder. Its trigger fires at login and every 5 minutes; extra starts are ignored while it runs, so the trigger also restarts it if it dies |
 
 | `PolyBot-Rollup` | once a day, about two hours after midnight UTC | [`scripts/run_rollup.sh`](scripts/run_rollup.sh): pack finished days into Parquet, copy new snapshots from SQLite, build one-minute bars |
+| `PolyBot-Paper` | every 5 minutes | [`scripts/run_paper.sh`](scripts/run_paper.sh): one PAPER trading cycle, then the status file |
 
-**Reloading.** After editing `install_tasks.ps1`, run the same command again; it replaces all five tasks. Code changes need no reload, because each run starts a fresh Python process.
+**Reloading.** After editing `install_tasks.ps1`, run the same command again; it replaces all six tasks. Code changes need no reload, because each run starts a fresh Python process.
 
 ```powershell
 Get-ScheduledTask PolyBot-* | Disable-ScheduledTask      # pause
@@ -361,6 +363,71 @@ python -m polybot query "SELECT market_id, COUNT(*) AS trades, SUM(size) AS shar
 
 `query` accepts questions only (`SELECT`, `WITH`, `DESCRIBE`, `SHOW`, `SUMMARIZE`). `polybot health` lists disk usage per day and per table.
 
+## The PAPER ledger
+
+**Everything here is fake money.** The paper job ([`polybot/paper.py`](polybot/paper.py)) has no wallet, no keys and no code that can send an order anywhere. It replays a model's opinions against the order books the streamer recorded and keeps score in its own small database, `data/paper.db` (delete it to reset the account).
+
+Every 5 minutes it runs one cycle:
+
+1. **Settle.** A held market that has resolved pays $1 a share to the winning side and nothing to the losing one (half each for a draw).
+2. **Exit.** For each open position, the strategy decides whether the edge is gone; if so, the position is sold into the recorded bids.
+3. **Enter.** The model gives a probability for every streamed market that closes within `max_days_to_end`. The strategy buys the side with the biggest edge, best opportunities first, up to `max_positions`.
+4. **Value** the account and write the status file.
+
+Steps 2 and 3 only run while the streamer is connected: a stale book would mean trading at prices that no longer exist.
+
+**How a fill is simulated** ([`polybot/fills.py`](polybot/fills.py)):
+
+- **At the ask or the bid, never the midpoint.** A buyer pays what sellers are asking; a seller gets what buyers are bidding. Buying NO takes the YES bids (a bid of 0.40 for YES is NO offered at 0.60).
+- **Limited by depth.** A bigger order walks through the five recorded levels at worse and worse prices, and can never fill more than the book held. An order below Polymarket's 5-share minimum is not placed.
+- **Fees.** Polymarket charges the taker `shares × rate × price × (1 − price)`. The rate comes from the market itself when the API gives one, otherwise from the table in `config.yaml` (taken from [docs.polymarket.com/trading/fees](https://docs.polymarket.com/trading/fees), read 2026-11-11). Geopolitics markets are fee-free; crypto is the most expensive at 0.07.
+
+**The strategy** ([`polybot/strategy.py`](polybot/strategy.py)) is one simple rule, `EdgeThreshold`. *Edge* is the model's probability minus what a share really costs (the ask plus the fee). It buys when the edge beats `min_edge` and sells when the edge has shrunk to `exit_edge` (leave `exit_edge` empty to hold every position to the end). A different rule only needs a `decide` method with the same shape.
+
+```yaml
+paper:
+  starting_balance: 1000    # fake dollars
+  model: favorite_longshot  # which file in models/ supplies the probabilities
+  min_edge: 0.01
+  exit_edge: 0.0
+  stake_fraction: 0.02      # 2% of the account per trade
+  max_positions: 20
+  max_days_to_end: 60
+  min_shares: 5
+```
+
+```bash
+python -m polybot paper      # one cycle now
+python -m polybot account    # equity, PnL, positions, win rate, max drawdown, fees paid
+```
+
+| Measure | Meaning |
+|---|---|
+| **Equity** | cash plus what the open positions would sell for at the current bid |
+| **PnL** | equity minus the starting balance (today's PnL is measured from the last value of the previous UTC day) |
+| **Win rate** | the share of closed positions that made money |
+| **Max drawdown** | the worst fall in equity from a previous high, as a share of that high |
+
+### The status file
+
+Each cycle writes `data/status/polybot.json` (the path is `status.path` in `config.yaml`) in the format the Hong Kong island page reads:
+
+```json
+{
+  "id": "polybot",
+  "updated_at": "2026-11-12T06:42:56-06:00",
+  "status": "running",
+  "mode": "paper",
+  "sample": false,
+  "current_task": "Streaming 300 markets",
+  "pnl": { "today": -2.59, "total": -2.59, "currency": "USD", "history": [-2.59] },
+  "metrics": { "markets_streamed": 300, "trades_recorded_today": 45808, "ws_reconnects_today": 4, "brier_market_7d": 0.3415 },
+  "events": [ { "time": "2026-11-12T06:42:55-06:00", "level": "info", "message": "PAPER bought 23.0 NO at 0.870 ($20.00): ..." } ]
+}
+```
+
+`mode` is always `"paper"`. Besides the four named metrics it adds the ones the page's PolyBot panel already has widgets for (`markets_tracked`, `open_positions`, `trades_today`, `win_rate`) plus `max_drawdown` and `paper_equity`. It never contains keys, wallet addresses or transaction hashes, and it is written to a temporary name and then renamed so the page cannot read half a file. `status` is `"running"` while the streamer is connected and `"idle"` otherwise.
+
 ## Strategies (v1 pipeline)
 
 | Strategy | Rule | Rationale |
@@ -397,6 +464,8 @@ python -m polybot stream              # record live order books and trades until
 python -m polybot rollup              # pack finished days, copy snapshots, build one-minute bars
 python -m polybot query "SELECT ..."  # ask the warehouse a question
 python -m polybot calibrate           # rebuild the calibration report and score the models
+python -m polybot paper               # one PAPER trading cycle (fake money)
+python -m polybot account             # the PAPER account at a glance
 ```
 
 **Upgrading an existing database?** Run `python -m polybot.resolutions --backfill` once. It checks every market that has already ended, rather than 50 per hour.
@@ -457,6 +526,11 @@ polybot/
   categories.py    Polymarket tags to one category per market
   tracker.py       calibration tracker: Brier scores, buckets, models against the market
   charts.py        the calibration charts (matplotlib)
+  fills.py         simulated fills: bid and ask, depth, fees
+  strategy.py      the edge-threshold rule that decides PAPER trades
+  ledger.py        the PAPER account: positions, fills, equity, win rate, drawdown
+  paper.py         the 5-minute PAPER trading job
+  statusfile.py    the status file for the Hong Kong island page
   storage.py       schema, migrations, snapshot persistence
   pricing.py       executable entry prices from bid/ask
   resolutions.py   resolution sweep: how each market ended
@@ -484,12 +558,13 @@ tests/fixtures/    real Gamma API responses saved for the parser tests
 ## Testing
 
 ```bash
-pytest          # 347 tests: pricing, storage, signals, settlement, resolutions, calibration,
+pytest          # 421 tests: pricing, storage, signals, settlement, resolutions, calibration,
                 # the agent (Kelly sizing, estimator, risk rules, settlement, learning),
                 # retries, the job lock, health, settings, discovery and the catalog,
                 # the order book, recorder and streamer (fake socket and clock),
                 # the warehouse views, the rollup steps and one-minute bars,
                 # the calibration tracker, the models and the report,
+                # simulated fills, the strategy, the PAPER ledger and the status file,
                 # and parsers against saved API and websocket messages
 ruff check .
 ```
@@ -508,13 +583,15 @@ CI runs both on every push and pull request, on Python 3.10 and 3.12.
 - [x] **v2.3** Live websocket recorder: order book tops and trades in daily files, heartbeat, reconnects
 - [x] **v2.4** Warehouse: Parquet by day, DuckDB views, SQLite migration, daily rollup with one-minute bars
 - [x] **v2.5** Calibration tracker: horizons, categories, `models/` folder, charts and Markdown report
+- [x] **v2.6** PAPER ledger: fills at the recorded bid and ask with depth and fees, edge-threshold strategy, status file
 - [ ] **v0.3** Strategy scorecard: P&L, max drawdown and Brier score per strategy, compared with the market baseline
 - [ ] **v0.4** Full-event fetching and a basket executor for neg-risk mispricings
 
 ## Limitations
 
 - **Paper only.** No orders are sent anywhere, and fills assume the full stake executes at the top of book. A trade is skipped when the side it needs has no quote; nothing is ever filled at the midpoint.
-- **Fees are not modelled.** Taker fees would reduce P&L further.
+- **Fees.** The PAPER ledger charges Polymarket's taker fees; the older v1 trader and the v2 agent still do not.
+- **Simulated fills are optimistic in one way.** They assume the recorded book was still there at the moment of the trade and that nobody else reacted to it. A real order can move the price; a paper one cannot.
 - **Sample size.** Calibration needs hundreds of resolved markets per horizon before buckets are meaningful; early numbers are noisy. The price history starts on 2026-10-30, so the 7-day horizon in particular rests on very few markets for now.
 - **Hourly resolution (v1).** Moves inside the hour are invisible to the pipeline, and its momentum signal compares snapshots about 20 to 24 hours apart.
 - **Live data is recorded, not yet used.** The strategies still trade on the 10-minute and hourly snapshots held in SQLite. The warehouse and its one-minute bars are for analysis; nothing reads them to make a trading decision yet.

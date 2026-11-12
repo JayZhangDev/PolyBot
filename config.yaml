@@ -19,3 +19,39 @@ stream:
   max_markets: 300          # how many markets to stream live
   rank_by: volume           # which number picks the top ones: volume, volume_24h or liquidity
   flush_seconds: 2          # how often the streamer writes what it has collected to disk
+
+# The PAPER account. Fake money only: nothing here can place a real order.
+paper:
+  starting_balance: 1000    # fake dollars the account starts with
+  model: favorite_longshot  # which file in models/ supplies the probabilities
+  min_edge: 0.01            # buy when the model's probability beats the all-in cost (price + fee) by this much
+  exit_edge: 0.0            # sell when that edge has shrunk to this; leave empty to hold until the market resolves
+  stake_fraction: 0.02      # share of the account put into one trade (0.02 = 2%)
+  max_positions: 20         # most markets held at once
+  max_days_to_end: 60       # skip markets that close later than this many days from now
+  min_shares: 5             # Polymarket's smallest order
+
+# Polymarket's taker fees, from docs.polymarket.com/trading/fees (read 2026-11-11).
+# Fee on a trade = shares x rate x price x (1 - price). Only the taker pays (the side that
+# takes an order already in the book, which is what a paper fill at the ask or bid is).
+# A market's own rate from the API is used when known; it sometimes differs from this table
+# (sports markets carried 0.03 on 2026-11-12). The table is the fallback.
+fees:
+  default_taker_rate: 0.05
+  taker_rate_by_category:
+    crypto: 0.07
+    sports: 0.05
+    economics: 0.05
+    culture: 0.05
+    weather: 0.05
+    politics: 0.04
+    finance: 0.04
+    tech: 0.04
+    mentions: 0.04
+    geopolitics: 0.0
+
+# The status file for the Hong Kong island page. A plain name is inside PolyBot's data folder.
+# A full path such as C:\Users\you\HKWallpaper\data\polybot.json also works (written the
+# Windows way, even though PolyBot runs inside WSL). Never contains keys or wallet addresses.
+status:
+  path: status/polybot.json

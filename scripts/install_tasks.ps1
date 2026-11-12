@@ -1,12 +1,13 @@
-# Registers PolyBot's five Windows scheduled tasks. All run inside WSL.
+# Registers PolyBot's six Windows scheduled tasks. All run inside WSL.
 #
 #   PolyBot-Hourly     the pipeline, once an hour at five past
 #   PolyBot-Agent      the paper-trading agent, every 10 minutes
 #   PolyBot-Discover   the market catalog refresh, every 15 minutes
 #   PolyBot-Stream     the live websocket recorder, which runs all the time
 #   PolyBot-Rollup     the daily rollup: pack finished days, copy snapshots, build bars
+#   PolyBot-Paper      the PAPER trading cycle and the status file, every 5 minutes
 #
-# Install, or reload after changing this file (safe to run again; it replaces all five):
+# Install, or reload after changing this file (safe to run again; it replaces all six):
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
 #
@@ -106,4 +107,11 @@ if (Test-Wanted "PolyBot-Rollup") {
     Register-PolyBotTask -Name "PolyBot-Rollup" -Script "run_rollup.sh" -EveryMinutes 1440 `
         -StartMinute ($rollupLocal.Hour * 60 + $rollupLocal.Minute) -LimitMinutes 60 -Wake $false `
         -Description "PolyBot daily rollup: Parquet packing, snapshot copy, one-minute bars (WSL)"
+}
+
+# The paper job keeps its own small database and never takes the main database lock, so it can run
+# every 5 minutes whatever the other jobs are doing. It also writes the status file each time.
+if (Test-Wanted "PolyBot-Paper") {
+    Register-PolyBotTask -Name "PolyBot-Paper" -Script "run_paper.sh" -EveryMinutes 5 -StartMinute 3 `
+        -LimitMinutes 4 -Wake $false -Description "PolyBot PAPER trading cycle and status file, every 5 minutes (WSL)"
 }

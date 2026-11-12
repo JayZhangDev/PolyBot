@@ -155,3 +155,30 @@ def test_calibration_summary_appears_once_a_report_exists():
     assert "Calibration (reports/calibration.md, built 2026-11-12 07:32 UTC):" in text
     assert "1 day before : market Brier 0.0835 on 70 markets" in text
     assert "7 days before: no resolved markets yet" in text
+
+
+# --------------------------- paper account ---------------------------
+
+
+def test_paper_account_block():
+    from polybot import ledger
+    from polybot.fills import Fill
+
+    assert "PAPER account: not started" in health.format_report(health.collect())
+    c = ledger.open_ledger(1_000.0)
+    ledger.record_buy(
+        c,
+        {"market_id": "1", "question": "Q?"},
+        "YES",
+        Fill(50.0, 0.40, 0.0, 20.0, "budget"),
+        model="m",
+        probability=0.5,
+        reason="edge",
+    )
+    ledger.record_equity(c)
+    ledger.finish_run(c, ledger.start_run(c), "success", summary="opened 1")
+    c.close()
+    text = health.format_report(health.collect())
+    assert "PAPER account (fake money; no real orders):" in text
+    assert "Equity     : $1,000.00  PnL +0.00 total" in text and "1 open, 0 closed, win rate n/a" in text
+    assert ", success" in text
