@@ -61,7 +61,7 @@ def run_once() -> str:
     )
     return (
         f"{saved + refreshed} snapshots, {swept['resolved']} newly resolved, "
-        f"opened {result['opened']}, closed {result['closed']}"
+        f"opened {result['opened']}, closed {result['closed']}, {s['open_positions']} positions open"
     )
 
 

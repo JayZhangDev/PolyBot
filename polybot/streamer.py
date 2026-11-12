@@ -16,6 +16,9 @@ Staying connected is most of the work:
 * **Resubscribe.** A new connection knows nothing about the old one, so the
   full list of tokens is sent again and fresh book snapshots arrive.
 * **Every disconnect is logged** with how long the connection lasted and why.
+* **Reading never waits for the disk.** One task reads the socket and does
+  nothing else; a second task does the writing. A slow drive then delays a
+  batch by a moment instead of making the server think we stopped listening.
 
 The hourly pipeline keeps taking its own snapshots over plain HTTP, so there is
 still data if this program is not running.
@@ -29,6 +32,7 @@ import logging
 import os
 import random
 import signal
+import threading
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -42,7 +46,9 @@ from polybot.recorder import BOOK_COLUMNS, TRADE_COLUMNS, Recorder, StreamMarket
 WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 PING_SECONDS = 10  # how often we send PING (what Polymarket's docs ask for)
 SILENCE_LIMIT_SECONDS = 30  # nothing received for this long means the connection is dead
-RECEIVE_WAIT_SECONDS = 1.0  # longest we wait for a message before doing the timed chores
+RECEIVE_WAIT_SECONDS = 1.0  # longest we wait for a message before checking the PING and silence timers
+RECEIVE_QUEUE = 4096  # messages the library may hold for us before it stops reading the socket
+CHORE_SECONDS = 0.5  # how often the disk task looks for work
 RECONNECT_BASE_SECONDS = 1.0
 RECONNECT_MAX_SECONDS = 60.0
 STABLE_SECONDS = 60  # a connection that lasted this long resets the backoff
@@ -101,7 +107,11 @@ def _connect(url: str):
     import websockets
 
     # ping_interval adds the protocol's own keepalive on top of the text PING the server expects.
-    return websockets.connect(url, ping_interval=20, ping_timeout=20, max_size=None, open_timeout=20)
+    # max_queue is how many received messages may wait for us; the default of 16 is a fraction of a second
+    # at this feed's rate, so a short pause on our side would stall the connection.
+    return websockets.connect(
+        url, ping_interval=20, ping_timeout=20, max_size=None, max_queue=RECEIVE_QUEUE, open_timeout=20
+    )
 
 
 class Streamer:
@@ -122,6 +132,7 @@ class Streamer:
         self._clock = clock
         self._sleep = sleep
         self._selection_mtime: float | None = None
+        self._write_lock = threading.Lock()
         self.state = "starting"
         self.connected_since: str | None = None
         self.last_message_at: str | None = None
@@ -177,20 +188,31 @@ class Streamer:
 
     # ----------------------------- saving -----------------------------
     def _save(self, book_rows: list[tuple], trades: list[tuple]) -> None:
-        """Append one batch to the day files. Runs in a worker thread so the socket keeps being read."""
-        if book_rows:
-            rawstore.append_rows("book_top", BOOK_COLUMNS, book_rows)
-        if trades:
-            rawstore.append_rows("trades", TRADE_COLUMNS, trades)
+        """Append one batch to the day files. Runs in a worker thread so the socket keeps being read.
+
+        The lock makes sure two batches are never written at once (a write that was
+        still running when a connection dropped must finish before the next begins),
+        or their lines could end up interleaved in the file.
+        """
+        with self._write_lock:
+            if book_rows:
+                rawstore.append_rows("book_top", BOOK_COLUMNS, book_rows)
+            if trades:
+                rawstore.append_rows("trades", TRADE_COLUMNS, trades)
+            self.book_rows_today += len(book_rows)
+            self.trades_today += len(trades)
 
     async def flush(self) -> None:
-        """Write everything collected since the last flush as one batch."""
+        """Write everything collected since the last flush as one batch.
+
+        Once rows are taken out of the recorder they exist only in this batch,
+        so the write is shielded: if the connection drops and this task is
+        cancelled at that very moment, the batch is still written.
+        """
         self._roll_day()
         book_rows, trades = self.recorder.drain()
         if book_rows or trades:
-            await asyncio.to_thread(self._save, book_rows, trades)
-            self.book_rows_today += len(book_rows)
-            self.trades_today += len(trades)
+            await asyncio.shield(asyncio.to_thread(self._save, book_rows, trades))
 
     # ----------------------------- selection -----------------------------
     def _selection_changed(self) -> bool:
@@ -210,9 +232,10 @@ class Streamer:
 
     async def _refresh_subscriptions(self, ws) -> None:
         """Subscribe to newly selected tokens and drop removed ones, without reconnecting."""
-        if not self._selection_changed():
+        if not await asyncio.to_thread(self._selection_changed):
             return
-        added, removed = self._apply_selection()
+        markets = await asyncio.to_thread(load_selection)  # file reads happen off the event loop
+        added, removed = self.recorder.set_selection(markets[: self.settings.max_stream_markets])
         if added:
             self.recorder.snapshot_floor_ms = _now_ms()
             await ws.send(json.dumps({"operation": "subscribe", "assets_ids": added}))
@@ -227,45 +250,44 @@ class Streamer:
             )
 
     # ----------------------------- one connection -----------------------------
-    async def _chores(self, ws, now: float, last_ping: float, last_heard: float) -> float:
-        """The timed jobs between messages. Returns the (possibly updated) time of the last PING."""
-        if now - last_ping >= PING_SECONDS:
-            await ws.send("PING")
-            last_ping = now
-        if now - last_heard > SILENCE_LIMIT_SECONDS:
-            raise DeadConnection(f"nothing received for {now - last_heard:.0f}s, not even a PONG")
-        if now - self._last_flush >= self.settings.flush_seconds:
-            await self.flush()
-            self._last_flush = now
-        if now - self._last_selection_check >= SELECTION_CHECK_SECONDS:
-            await self._refresh_subscriptions(ws)
-            self._last_selection_check = now
-        if now - self._last_status >= STATUS_SECONDS:
-            self._write_status()
-            self._last_status = now
-        if now - self._last_summary >= SUMMARY_SECONDS:
-            log.info(
-                "Streaming %d markets: %d messages so far, today %d trades and %d book rows, %d reconnects.",
-                len(self.recorder.markets),
-                self.messages_total,
-                self.trades_today,
-                self.book_rows_today,
-                self.reconnects_today,
-            )
-            self._last_summary = now
-        return last_ping
+    async def _disk_chores(self, ws) -> None:
+        """Everything that touches the disk, on its own task so the socket is never kept waiting.
 
-    async def run_session(self, ws) -> None:
-        """Subscribe on an open socket and record until it fails or a stop is requested."""
-        self.recorder.reset_books()
-        self.recorder.snapshot_floor_ms = _now_ms()
-        await ws.send(json.dumps({"assets_ids": self.recorder.tokens, "type": "market"}))
-        self.state, self.connected_since = "connected", _utc_now().isoformat(timespec="seconds")
-        log.info(
-            "Connected. Subscribed to %d tokens for %d markets.", len(self.recorder.tokens), len(self.recorder.markets)
-        )
+        Writing a batch can stall for seconds when the drive is busy. If reading
+        the socket had to wait for that, the server would see a client that had
+        stopped listening and drop it ("slow consumer"). So this loop does the
+        slow work, and ``_receive`` does nothing but read.
+        """
+        while True:
+            await asyncio.sleep(CHORE_SECONDS)
+            now = self._clock()
+            if now - self._last_flush >= self.settings.flush_seconds:
+                await self.flush()
+                self._last_flush = now
+            if now - self._last_selection_check >= SELECTION_CHECK_SECONDS:
+                await self._refresh_subscriptions(ws)
+                self._last_selection_check = now
+            if now - self._last_status >= STATUS_SECONDS:
+                await asyncio.to_thread(rawstore.write_json_atomic, rawstore.status_path(), self.status())
+                self._last_status = now
+            if now - self._last_summary >= SUMMARY_SECONDS:
+                log.info(
+                    "Streaming %d markets: %d messages so far, today %d trades and %d book rows, %d reconnects.",
+                    len(self.recorder.markets),
+                    self.messages_total,
+                    self.trades_today,
+                    self.book_rows_today,
+                    self.reconnects_today,
+                )
+                self._last_summary = now
+
+    async def _receive(self, ws, chores: asyncio.Task) -> None:
+        """Read the socket until it fails or a stop is requested. Also sends PING and watches for silence."""
         last_ping = last_heard = self._clock()
         while not self.stop.is_set():
+            if chores.done():  # the disk task never ends on its own, so this means it failed: say why
+                chores.result()
+                raise RuntimeError("the disk task ended unexpectedly")
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=RECEIVE_WAIT_SECONDS)
             except asyncio.TimeoutError:
@@ -277,7 +299,27 @@ class Streamer:
                 for event in parse_frame(raw):
                     self.recorder.handle(event)
                     self.messages_total += 1
-            last_ping = await self._chores(ws, now, last_ping, last_heard)
+            if now - last_ping >= PING_SECONDS:
+                await ws.send("PING")
+                last_ping = now
+            if now - last_heard > SILENCE_LIMIT_SECONDS:
+                raise DeadConnection(f"nothing received for {now - last_heard:.0f}s, not even a PONG")
+
+    async def run_session(self, ws) -> None:
+        """Subscribe on an open socket and record until it fails or a stop is requested."""
+        self.recorder.reset_books()
+        self.recorder.snapshot_floor_ms = _now_ms()
+        await ws.send(json.dumps({"assets_ids": self.recorder.tokens, "type": "market"}))
+        self.state, self.connected_since = "connected", _utc_now().isoformat(timespec="seconds")
+        log.info(
+            "Connected. Subscribed to %d tokens for %d markets.", len(self.recorder.tokens), len(self.recorder.markets)
+        )
+        chores = asyncio.create_task(self._disk_chores(ws))
+        try:
+            await self._receive(ws, chores)
+        finally:
+            chores.cancel()
+            await asyncio.gather(chores, return_exceptions=True)
 
     # ----------------------------- the reconnect loop -----------------------------
     async def run(self) -> None:

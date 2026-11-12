@@ -205,7 +205,7 @@ Errors in the last 24h:
 
 The command exits with code 1 when the newest snapshot is more than 30 minutes old.
 
-- **Log.** The streamer logs to `logs/stream.log` (connections, every disconnect with its reason, selection changes, a summary every five minutes). Every run of the other jobs writes timestamped lines to `logs/polybot.log`. The file rotates at about 2 MB and five old files are kept. `logs/task_output.log` only receives output from a run that crashed before logging started.
+- **Log.** The streamer logs to `logs/stream.log` (connections, every disconnect with its reason, selection changes, a summary every five minutes). Every run of the other jobs writes timestamped lines to `logs/polybot.log`. `pipeline.log` and `agent.log` in the project folder are small heartbeat files ([`polybot/heartbeat.py`](polybot/heartbeat.py)): another program on this PC, the Peak Watcher behind the Hong Kong island page, reads them to tell whether PolyBot is running. The file rotates at about 2 MB and five old files are kept. `logs/task_output.log` only receives output from a run that crashed before logging started.
 - **Retries.** A request that fails with a network error or a 5xx status is retried up to four times, waiting 1s, 2s, 4s then 8s ([`polybot/http.py`](polybot/http.py)). If a later page of the market listing still fails, the pages already loaded are kept.
 - **One job at a time.** The pipeline and the agent share one SQLite file, so a lock file (`polybot.db.lock`) makes the second job wait for the first. A lock older than 12 minutes belongs to a run that was killed and is taken over.
 - **Every run is recorded.** The `job_runs` table holds the start, finish, status and error of each run. A run that crashes is recorded as failed and the next one starts normally.
@@ -308,6 +308,7 @@ ts,market_id,outcome,price,size,side,fee_rate_bps,tx_hash
 - **Resubscribe.** A new connection gets the full token list again, and fresh book snapshots replace the old books.
 - **Selection changes** are picked up within 30 seconds by subscribing and unsubscribing on the open connection.
 - **Every disconnect is logged** with how long the connection lasted and why.
+- **Reading never waits for the disk.** One task reads the socket and does nothing else; a second does the writing. A slow drive delays a batch by a moment instead of making the server think the client stopped listening (it disconnects a "slow consumer").
 - **Backup.** The hourly pipeline and the agent keep taking their own snapshots over HTTP, so there is still price history if the streamer is down.
 
 ```powershell
@@ -450,6 +451,7 @@ polybot/
   recorder.py      websocket messages in, book_top and trade rows out
   rawstore.py      one CSV per table per day under data/raw, plus status files
   streamer.py      the websocket connection: heartbeat, reconnects, batched writes
+  heartbeat.py     the two small files the Peak Watcher reads to see PolyBot is alive
   warehouse.py     DuckDB views over the Parquet and CSV files; the query command
   rollup.py        daily job: pack days, copy snapshots from SQLite, one-minute bars
   categories.py    Polymarket tags to one category per market
@@ -482,7 +484,7 @@ tests/fixtures/    real Gamma API responses saved for the parser tests
 ## Testing
 
 ```bash
-pytest          # 337 tests: pricing, storage, signals, settlement, resolutions, calibration,
+pytest          # 347 tests: pricing, storage, signals, settlement, resolutions, calibration,
                 # the agent (Kelly sizing, estimator, risk rules, settlement, learning),
                 # retries, the job lock, health, settings, discovery and the catalog,
                 # the order book, recorder and streamer (fake socket and clock),

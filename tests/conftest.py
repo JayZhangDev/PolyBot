@@ -24,6 +24,7 @@ def temp_db(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYBOT_CONFIG", str(tmp_path / "config.yaml"))  # absent, so tests get the defaults
     monkeypatch.setenv("POLYBOT_DATA_DIR", str(tmp_path / "data"))  # live-data files stay out of the project
     monkeypatch.setenv("POLYBOT_REPORTS_DIR", str(tmp_path / "reports"))
+    monkeypatch.setenv("POLYBOT_HEARTBEAT_DIR", str(tmp_path))  # the watcher's two files stay out of the project
     monkeypatch.setenv("POLYBOT_MODELS_DIR", str(tmp_path / "models"))  # empty unless a test adds models
     monkeypatch.setattr("polybot.http._shared_session", _no_network)
     yield path

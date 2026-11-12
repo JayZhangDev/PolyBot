@@ -28,7 +28,8 @@ class Clock:
 
 
 class FakeSocket:
-    """Plays back queued frames. A queued function is called (to move the clock, say); an exception is raised.
+    """Plays back queued frames. A queued function is called (to move the clock, say), an exception is
+    raised, and a float is a pause of that many seconds.
 
     When the queue is empty, ``recv`` waits like a silent connection would.
     """
@@ -36,14 +37,24 @@ class FakeSocket:
     def __init__(self, *script: object) -> None:
         self.script = list(script)
         self.sent: list[str] = []
+        self.resume_at = 0.0
 
     async def send(self, text: str) -> None:
         self.sent.append(text)
 
     async def recv(self) -> str:
-        while self.script:
+        loop = asyncio.get_running_loop()
+        while True:
+            # The streamer gives up on a quiet socket after a moment and asks again, so a pause is kept as a
+            # time to wait until rather than one long sleep that the retry would cut short.
+            while loop.time() < self.resume_at:
+                await asyncio.sleep(0.002)
+            if not self.script:
+                break
             item = self.script.pop(0)
-            if callable(item):
+            if isinstance(item, float):
+                self.resume_at = loop.time() + item
+            elif callable(item):
                 item()
             elif isinstance(item, Exception):
                 raise item
@@ -71,6 +82,7 @@ class FakeConnection:
 @pytest.fixture(autouse=True)
 def fast_timeouts(monkeypatch):
     monkeypatch.setattr(streamer, "RECEIVE_WAIT_SECONDS", 0.01)
+    monkeypatch.setattr(streamer, "CHORE_SECONDS", 0.001)
 
 
 def write_selection(*market_ids: str) -> None:
@@ -163,17 +175,34 @@ def test_messages_are_written_in_a_batch_when_the_flush_time_comes():
         clock = Clock()
         s = make(clock)
         s._apply_selection()
-        # Two messages arrive, nothing is on disk yet; 3 seconds later the batch is written.
+        real_save = s._save
+
+        def noting_save(book_rows, trades):  # note each batch as it is handed to the disk
+            batches.append((len(book_rows), len(trades)))
+            real_save(book_rows, trades)
+
+        s._save = noting_save
+        # Two messages arrive and nothing is written; 3 seconds later the disk task writes them as one batch.
         sock = FakeSocket(
-            book("Y1"), trade("N1"), lambda: seen.append(len(rows("trades"))), after(clock, 3), trade("Y1"), s.stop.set
+            book("Y1"),
+            trade("N1"),
+            0.05,
+            lambda: seen.append(list(batches)),
+            after(clock, 3),
+            0.05,
+            lambda: seen.append(list(batches)),
+            trade("Y1"),
+            s.stop.set,
         )
         await s.run_session(sock)
         await s.flush()
         return s
 
-    seen: list[int] = []
+    batches: list[tuple[int, int]] = []
+    seen: list[list[tuple[int, int]]] = []
     s = asyncio.run(scenario())
-    assert seen == [0]  # not written one row at a time
+    assert seen == [[], [(1, 1)]]  # nothing until the flush time, then one batch with both rows
+    assert batches == [(1, 1), (0, 1)]
     assert [r["market_id"] for r in rows("book_top")] == ["1"] and rows("book_top")[0]["best_bid"] == "0.42"
     assert [(r["market_id"], r["outcome"]) for r in rows("trades")] == [("1", "1"), ("1", "0")]
     assert (s.trades_today, s.book_rows_today, s.messages_total, s.state) == (2, 1, 3, "connected")
@@ -223,7 +252,7 @@ def test_new_selection_subscribes_and_unsubscribes_without_reconnecting():
             os.utime(rawstore.selection_path(), (1, 1))  # a different file time, whatever the disk's resolution
             clock.t += 31
 
-        sock = FakeSocket(discovery_picks_new_markets, "PONG", s.stop.set)
+        sock = FakeSocket(discovery_picks_new_markets, "PONG", 0.05, s.stop.set)
         await s.run_session(sock)
         assert sorted(s.recorder.markets) == ["2", "3"]
         return sock
@@ -377,3 +406,88 @@ def test_selection_file_with_a_broken_entry_keeps_the_good_ones():
     assert (market.market_id, market.yes_token, market.no_token, market.category) == ("7", "Y7", "N7", "crypto")
     rawstore.selection_path().unlink()
     assert load_selection() == []
+
+
+# --------------------------- reading never waits for the disk ---------------------------
+
+
+def test_slow_disk_does_not_stop_the_socket_being_read():
+    import threading
+    import time as real_time
+
+    async def scenario() -> tuple[list[tuple[int, bool]], Streamer]:
+        write_selection("1")
+        clock = Clock()
+        s = make(clock)
+        s._apply_selection()
+        writing, finished = threading.Event(), threading.Event()
+        real_save = s._save
+
+        def slow_save(book_rows, trades):  # a drive that takes a third of a second to accept a batch
+            writing.set()
+            real_time.sleep(0.3)
+            real_save(book_rows, trades)
+            finished.set()
+
+        s._save = slow_save
+        seen: list[tuple[int, bool]] = []
+        sock = FakeSocket(
+            book("Y1"),
+            after(clock, 3),
+            0.05,  # the disk task starts its slow write here
+            trade("Y1"),
+            trade("N1"),
+            trade("Y1"),
+            lambda: seen.append((s.messages_total, writing.is_set() and not finished.is_set())),
+            s.stop.set,
+        )
+        await s.run_session(sock)
+        await s.flush()
+        return seen, s
+
+    seen, s = asyncio.run(scenario())
+    assert seen == [(4, True)]  # three more messages were read while the write was still going
+    assert len(rows("book_top")) == 1 and len(rows("trades")) == 3 and s.trades_today == 3
+
+
+def test_disk_failure_ends_the_session_with_the_real_reason():
+    async def scenario() -> None:
+        write_selection("1")
+        clock = Clock()
+        s = make(clock)
+        s._apply_selection()
+
+        def broken_save(book_rows, trades):
+            raise OSError("No space left on device")
+
+        s._save = broken_save
+        await s.run_session(FakeSocket(book("Y1"), after(clock, 3), 0.05, "PONG", 0.05))
+
+    with pytest.raises(OSError, match="No space left"):
+        asyncio.run(scenario())
+
+
+def test_batch_is_not_lost_when_the_connection_drops_as_it_is_handed_to_the_disk():
+    async def scenario() -> None:
+        write_selection("1")
+        clock = Clock()
+        s = make(clock)
+        s._apply_selection()
+        s.recorder.handle(
+            {
+                "event_type": "last_trade_price",
+                "asset_id": "Y1",
+                "price": "0.5",
+                "size": "1",
+                "side": "BUY",
+                "timestamp": str(NOW_MS),
+            }
+        )
+        writer = asyncio.create_task(s.flush())
+        await asyncio.sleep(0)  # the batch has left the recorder and is on its way to a worker thread
+        writer.cancel()  # the session ends at exactly that moment
+        await asyncio.gather(writer, return_exceptions=True)
+        await asyncio.sleep(0.2)
+
+    asyncio.run(scenario())
+    assert len(rows("trades")) == 1

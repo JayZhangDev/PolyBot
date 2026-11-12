@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from polybot import heartbeat
 from polybot.db import connect, db_path
 from polybot.logsetup import setup_logging
 
@@ -214,10 +215,12 @@ def run_job(
         summary = work() if prepare is None else work(prepared)
         _finish_run(run_id, "success", summary=summary)
         log.info("%s run #%d finished: %s", job, run_id, summary)
+        heartbeat.record(job, started, summary=summary)
         return 0
     except Exception as exc:  # a scheduled job must always leave a record, whatever went wrong
         log.exception("%s run failed", job)
         _record_failure(run_id, f"{type(exc).__name__}: {exc}")
+        heartbeat.record(job, started, error=f"{type(exc).__name__}: {exc}")
         return 1
     finally:
         release_lock(token)
