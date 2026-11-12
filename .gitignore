@@ -15,6 +15,7 @@ agent.log
 pipeline.log
 logs/
 data/
+reports/
 *.db.lock
 *.db.lock.stale.*
 paper_pnl.txt

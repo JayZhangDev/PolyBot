@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polybot"
-version = "2.4.0"
+version = "2.5.0"
 description = "Polymarket data pipeline, calibration tracker and autonomous paper-trading agent"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -15,6 +15,7 @@ dependencies = [
     "pyyaml>=6.0",
     "websockets>=13",
     "duckdb>=1.1",
+    "matplotlib>=3.8",
     "pandas>=2.0",
     "plotly>=5.18",
     "streamlit>=1.50",

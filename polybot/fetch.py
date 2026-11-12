@@ -14,8 +14,9 @@ from polybot.storage import counts, save_snapshot
 GAMMA_BASE = "https://gamma-api.polymarket.com"
 PAGE_SIZE = 100  # the API returns at most 100 markets per request
 PAGE_PAUSE = 0.2  # seconds between pages: far below the rate limit, on purpose
-BY_ID_TRIES = 3  # single-market lookups get fewer retries; they are tried again next cycle
-MAX_BY_ID_FAILURES = 5  # this many lookups failing in a row means the API is down: stop asking
+BY_ID_TRIES = 3  # lookups by ID get fewer retries; they are tried again next cycle
+BY_ID_BATCH = 50  # market IDs per lookup request
+MAX_BY_ID_FAILURES = 3  # this many batches failing in a row means the API is down: stop asking
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ def _listing_params(now: str, cursor: str | None) -> dict:
     """Query for one page of open markets, highest volume first."""
     params: dict[str, object] = {
         "closed": "false",
+        "include_tag": "true",  # tags are how a market gets its category
         "end_date_min": now,
         "order": "volumeNum",
         "ascending": "false",
@@ -81,28 +83,32 @@ def fetch_markets_by_id(market_ids: list[str]) -> list[dict]:
 
     The active-market listing stops returning a market once it closes, so this
     is how open paper positions learn that their market has resolved.
-    Failures are logged and skipped so one bad ID never blocks the cycle, and
-    the batch stops early if the API is clearly down.
+
+    IDs are sent in batches of 50 per request (``closed=any`` returns open and
+    closed markets alike), so checking 200 markets is 4 requests, not 200. An ID
+    the API does not know is simply left out of the answer. A batch that fails
+    is logged and skipped, and the run stops early if the API is clearly down.
     """
     markets: list[dict] = []
     failures_in_a_row = 0
-    for position, mid in enumerate(market_ids):
+    for start in range(0, len(market_ids), BY_ID_BATCH):
+        batch = market_ids[start : start + BY_ID_BATCH]
+        params = [("id", market_id) for market_id in batch]
+        params += [("closed", "any"), ("include_tag", "true"), ("limit", PAGE_SIZE)]
         try:
-            market = http.get_json(f"{GAMMA_BASE}/markets/{mid}", tries=BY_ID_TRIES)
+            body = http.get_json(f"{GAMMA_BASE}/markets/keyset", params, tries=BY_ID_TRIES)
         except FetchError as exc:
-            log.warning("Could not refresh market %s: %s", mid, exc)
+            log.warning("Could not refresh %d markets starting with %s: %s", len(batch), batch[0], exc)
             failures_in_a_row += 1
             if failures_in_a_row >= MAX_BY_ID_FAILURES:
-                log.warning(
-                    "%d lookups failed in a row; skipping the remaining %d until next cycle",
-                    failures_in_a_row,
-                    len(market_ids) - position - 1,
-                )
+                log.warning("%d batches failed in a row; leaving the rest until next cycle", failures_in_a_row)
                 break
             continue
         failures_in_a_row = 0
-        if isinstance(market, dict):
-            markets.append(market)
+        page = body.get("markets") if isinstance(body, dict) else None
+        markets.extend(m for m in page or [] if isinstance(m, dict))
+        if start + BY_ID_BATCH < len(market_ids):
+            time.sleep(PAGE_PAUSE)
     return markets
 
 

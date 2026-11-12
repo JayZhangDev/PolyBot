@@ -1,6 +1,6 @@
 """The daily rollup: pack finished days, copy new snapshots out of SQLite, and build one-minute bars.
 
-Four steps, each safe to run again at any time:
+Five steps, each safe to run again at any time:
 
 1. **Pack.** A day that is over has its CSV files rewritten as Parquet. The
    row counts are compared, and only if they match is the CSV deleted.
@@ -12,6 +12,8 @@ Four steps, each safe to run again at any time:
    with its category and (once resolved) its outcome.
 4. **Bars.** For each day whose data changed, one row per market per minute:
    open, high, low and close of the midpoint, average spread, and volume.
+5. **Calibration report.** ``reports/calibration.md`` and its charts are rebuilt
+   from the refreshed data (see ``polybot.tracker``).
 
 A *bar* squeezes everything that happened in one minute into a handful of
 numbers, which is why analysis over months of data stays fast. The *midpoint*
@@ -31,8 +33,9 @@ from pathlib import Path
 
 import duckdb
 
-from polybot import rawstore, warehouse
+from polybot import rawstore, resolutions, tracker, warehouse
 from polybot.db import db_path
+from polybot.http import FetchError
 from polybot.jobs import run_job
 
 SETTLE_SECONDS = 600  # a day's CSV must be untouched this long before it is packed
@@ -193,11 +196,12 @@ def _market_rows(c: sqlite3.Connection) -> dict[str, dict]:
     """One dict per market, merged from the catalog, the snapshotted markets and the recorded outcomes."""
     rows: dict[str, dict] = {}
     if _has_table(c, "markets"):
-        for m in c.execute("SELECT id, question, slug, end_date, first_seen, last_seen FROM markets"):
+        for m in c.execute("SELECT id, question, slug, category, end_date, first_seen, last_seen FROM markets"):
             rows[m["id"]] = {
                 "market_id": m["id"],
                 "question": m["question"],
                 "slug": m["slug"],
+                "category": m["category"],
                 "end_date": m["end_date"],
                 "first_seen": m["first_seen"],
                 "last_seen": m["last_seen"],
@@ -249,6 +253,21 @@ def copy_markets(con: duckdb.DuckDBPyConnection) -> int:
     )
     tmp.unlink()
     return count
+
+
+def fill_missing_categories() -> None:
+    """Look up categories for markets that have none.
+
+    A network problem here is logged, not fatal: the rollup is mostly local
+    work and should not fail because the API is having a bad minute.
+    """
+    try:
+        result = resolutions.backfill_categories()
+    except FetchError as exc:
+        log.warning("Could not look up missing categories this time: %s", exc)
+        return
+    if result["missing"]:
+        log.info("%d markets had no category; filled in %d.", result["missing"], result["filled"])
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +344,7 @@ def build_stale_bars() -> dict[str, int]:
 # The job
 # ---------------------------------------------------------------------------
 def run_rollup() -> str:
-    """All four steps. Returns the one-line summary recorded for the run."""
+    """All five steps. Returns the one-line summary recorded for the run."""
     con = duckdb.connect()
     try:
         packed = pack_finished_days(con)
@@ -340,15 +359,19 @@ def run_rollup() -> str:
             )
         snapshots = copy_snapshots(con)
         log.info("Copied %d snapshot rows from SQLite across %d days.", snapshots["rows"], snapshots["days"])
+        fill_missing_categories()
         markets = copy_markets(con)
     finally:
         con.close()
     bars = build_stale_bars()
+    report = tracker.build_report()
+    tracker.write_report(report)
+    log.info("Calibration report rebuilt. %s", tracker.console_summary(report))
     for day, count in bars.items():
         log.info("Built %d one-minute bars for %s.", count, day)
     return (
         f"packed {len(packed)} day files, copied {snapshots['rows']} snapshots, {markets} markets, "
-        f"built {sum(bars.values())} bars for {len(bars)} days"
+        f"built {sum(bars.values())} bars for {len(bars)} days, calibration report rebuilt"
     )
 
 

@@ -132,3 +132,26 @@ def test_disk_usage_is_listed_per_day_newest_first():
 
 def test_disk_usage_with_no_data_yet():
     assert "no data files yet" in health.format_report(health.collect())
+
+
+# --------------------------- calibration summary ---------------------------
+
+
+def test_calibration_summary_appears_once_a_report_exists():
+    from polybot import rawstore
+
+    assert "Calibration: no report yet" in health.format_report(health.collect())
+    rawstore.write_json_atomic(
+        rawstore.reports_dir() / "calibration.json",
+        {
+            "built_at": "2026-11-12T07:32:00+00:00",
+            "brier_market_1d": 0.0835,
+            "markets_1d": 70,
+            "brier_market_7d": None,
+            "markets_7d": 0,
+        },
+    )
+    text = health.format_report(health.collect())
+    assert "Calibration (reports/calibration.md, built 2026-11-12 07:32 UTC):" in text
+    assert "1 day before : market Brier 0.0835 on 70 markets" in text
+    assert "7 days before: no resolved markets yet" in text

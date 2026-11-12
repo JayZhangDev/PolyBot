@@ -105,6 +105,7 @@ def collect(now: datetime | None = None) -> dict:
     )
     report["stream"] = stream_report(now)
     report["disk"] = disk_report()
+    report["calibration"] = rawstore.read_json(rawstore.reports_dir() / "calibration.json")
     return report
 
 
@@ -125,7 +126,7 @@ def disk_report(days: int = DISK_DAYS_SHOWN) -> dict:
 
 def _seconds_since(stamp: object, now: datetime) -> float | None:
     moment = parse_ts(stamp) if isinstance(stamp, str) else None
-    return None if moment is None else (now - moment).total_seconds()
+    return None if moment is None else max(0.0, (now - moment).total_seconds())
 
 
 def stream_report(now: datetime) -> dict | None:
@@ -183,6 +184,7 @@ def format_report(r: dict) -> str:
 
     lines += ["", *_stream_lines(r.get("stream"))]
     lines += ["", *_disk_lines(r["disk"])]
+    lines += ["", *_calibration_lines(r.get("calibration"))]
     lines += [
         "",
         f"Database   : {db_path()}",
@@ -191,6 +193,19 @@ def format_report(r: dict) -> str:
         f"Live data  : {rawstore.data_dir() / 'raw'}",
     ]
     return "\n".join(lines)
+
+
+def _calibration_lines(summary: dict | None) -> list[str]:
+    """The market's Brier score at each horizon, from the last calibration report."""
+    if not summary:
+        return ["Calibration: no report yet (run `polybot calibrate`)"]
+    lines = [f"Calibration (reports/calibration.md, built {_when(summary.get('built_at'))}):"]
+    for days in (1, 7):
+        score, markets = summary.get(f"brier_market_{days}d"), summary.get(f"markets_{days}d", 0)
+        name = "1 day before " if days == 1 else f"{days} days before"
+        detail = f"market Brier {score:.4f} on {markets} markets" if score is not None else "no resolved markets yet"
+        lines.append(f"  {name}: {detail}")
+    return lines
 
 
 def _megabytes(size: int) -> str:

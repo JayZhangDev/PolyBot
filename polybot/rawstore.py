@@ -40,6 +40,11 @@ def data_dir() -> Path:
     return Path(os.environ.get("POLYBOT_DATA_DIR", PROJECT_ROOT / "data"))
 
 
+def reports_dir() -> Path:
+    """``reports/`` in the project, or the folder named by ``POLYBOT_REPORTS_DIR``."""
+    return Path(os.environ.get("POLYBOT_REPORTS_DIR", PROJECT_ROOT / "reports"))
+
+
 def selection_path() -> Path:
     return data_dir() / "stream_selection.json"
 

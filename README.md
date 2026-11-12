@@ -21,6 +21,7 @@ The core question throughout is **how well prediction-market prices forecast out
 | **v2.2** | Market catalog, tag-based categories, `config.yaml` | Know every open market above the floors, and choose which ones to stream |
 | **v2.3** | Live websocket recorder ([`polybot/streamer.py`](polybot/streamer.py)) | Record order books and every trade for the selected markets as they happen |
 | **v2.4** | Warehouse: Parquet files queried with DuckDB, daily rollup | Keep months of live data small, and answer questions over all of it in well under a second |
+| **v2.5** | Calibration tracker, `models/` folder, report with charts | Score the market's prices by horizon and category, and score any model against the market |
 
 The hourly pipeline is unchanged. The agent runs beside it, shares its market, snapshot and resolution tables, and keeps its own positions and bankroll so the two strategies can be compared cleanly. The git history shows each step.
 
@@ -54,21 +55,44 @@ Each hourly cycle (`python -m polybot.pipeline`):
 4. **Settle.** Positions in closed markets settle at $1 or $0 per share; the bankroll is credited.
 5. **Trade.** New signals open positions at executable prices (YES at the ask, NO at 1 − bid), 1% of bankroll each, up to 10 open positions and 3 new per strategy per cycle.
 
-## Calibration
+## Calibration: how good are the prices, and can a model beat them?
 
-For each resolved market and each horizon *h* (1, 7, 30 days), PolyBot takes the last YES price it recorded at least *h* days before resolution and compares it with the outcome:
+A price of 0.30 is the market saying "30% chance". The market is *calibrated* if, across many markets priced near 0.30, about 30% really resolve YES. The tracker ([`polybot/tracker.py`](polybot/tracker.py)) takes every resolved market's price **1 day** and **7 days** before it was decided and compares it with what happened:
 
-- **Brier score**: mean of (price − outcome)². 0 is perfect; always guessing 50% scores 0.25.
-- **Brier skill score**: 1 − Brier / Brier(base rate). Above 0 means prices beat simply predicting how often YES happens overall.
-- **Reliability curve**: prices grouped into 10 buckets, average price vs. share that resolved YES. A calibrated market sits on the diagonal.
-- **Longshot check**: for contracts priced at or below 0.15, average price vs. actual YES rate. If price exceeds the YES rate, longshots are overpriced and the longshot-fade signal has a basis.
-
-Resolution time is the earlier of the market's close and the first snapshot already pinned at its final price, so markets decided early aren't scored on post-decision prices. Markets that close without a clear YES/NO (VOID) are excluded.
+- **Brier score**: the average of (probability − outcome)², with the outcome 1 for YES and 0 for NO. 0 is perfect, always saying 50% scores 0.25, lower is better.
+- **Calibration curve**: markets grouped into ten price buckets; for each, the average price against the share that resolved YES. A calibrated market sits on the diagonal.
+- **By category**: the same score split by Polymarket's own categories, which come from each market's tags.
 
 ```bash
-python -m polybot.calibration             # all horizons
-python -m polybot.calibration --horizon 7
+python -m polybot calibrate     # rebuild the report from the warehouse (the daily rollup also does this)
 ```
+
+It writes `reports/calibration.md` (summary tables), `reports/calibration_1d.png`, `reports/calibration_7d.png`, two `brier_by_category_*.png` charts and a small `calibration.json` that `polybot health` reads. `reports/` is generated output and is not in git.
+
+**Rules that keep the scoring honest.**
+
+- "Decided" is the earlier of the market's close and the first snapshot already at 99% or more for the winning side, so a market everyone considered settled is not scored on those late prices.
+- The price must have been recorded in the day before the cut-off. A market PolyBot had stopped watching is left out rather than scored on a stale price.
+- VOID markets are left out.
+
+### Adding your own model
+
+Each `.py` file in [`models/`](models/) is one model: a `NAME` and a `predict(market)` function that returns a probability. The tracker asks every model for a probability on every resolved market, shows it only what was known at that moment (price, bid and ask, volume, liquidity, days left, the last day's price change, category, question), and compares its Brier score with the market's **on the same markets**.
+
+```python
+NAME = "my_model"
+DESCRIPTION = "One sentence on the idea being tested."
+
+
+def predict(market: dict) -> float | None:
+    return market["price"]          # returning the price scores exactly like the market
+```
+
+Two examples ship with the repo: `favorite_longshot.py` (pushes each price a little further from 50%) and `momentum_24h.py` (adds half of the previous day's move). See [`models/README.md`](models/README.md) for the full contract.
+
+A model gets no verdict until it has been scored on 100 markets, and after that the report only says "ahead of the market so far" when its gain is more than twice its standard error. Markets that resolve together are not independent, so even that is a reason to keep watching, not a result.
+
+The older module `polybot/calibration.py` (30-day horizon, longshot check) is unchanged; the agent's learning loop and the dashboard still read it.
 
 ## PolyBot v2: the autonomous agent
 
@@ -318,17 +342,18 @@ data/bars/bars_1m/date=2026-11-11/data.parquet     one-minute bars
 | `markets` | question, category, end date, tokens, and the outcome once resolved |
 | `bars_1m` | one row per market per minute: open, high, low and close of the midpoint, average spread, volume in shares and dollars, trade count |
 
-**The daily rollup** ([`polybot/rollup.py`](polybot/rollup.py)) has four steps, each safe to run again:
+**The daily rollup** ([`polybot/rollup.py`](polybot/rollup.py)) has five steps, each safe to run again:
 
 1. **Pack.** A finished day's CSV is rewritten as Parquet. The CSV is deleted only if the row counts match.
 2. **Copy snapshots.** Rows added to SQLite since the last run are copied in. SQLite is opened read-only and never changed.
-3. **Copy markets.** The `markets` file is rewritten from the catalog, the snapshot history and the recorded outcomes.
+3. **Copy markets.** Markets with no category yet are looked up (50 per request), then the `markets` file is rewritten from the catalog, the snapshot history and the recorded outcomes.
 4. **Bars.** Any day whose data changed gets its one-minute bars rebuilt. A minute with trades but no change at the top of the book carries the previous close.
+5. **Calibration report.** `reports/calibration.md` and its charts are rebuilt from the refreshed data.
 
 **Migrating existing data.** `python -m polybot migrate` runs the same copy by hand and prints the row counts on both sides. `polybot.db` stays where it is; the pipeline, the agent and the paper traders still use it as their working database.
 
 ```bash
-python -m polybot rollup      # run the four steps now
+python -m polybot rollup      # run the five steps now
 python -m polybot migrate     # the first copy, with a comparison report
 python -m polybot query "SELECT market_id, COUNT(*) AS trades, SUM(size) AS shares FROM trades GROUP BY 1 ORDER BY 2 DESC LIMIT 5"
 ```
@@ -370,6 +395,7 @@ python -m polybot markets             # what config.yaml selects for streaming
 python -m polybot stream              # record live order books and trades until stopped
 python -m polybot rollup              # pack finished days, copy snapshots, build one-minute bars
 python -m polybot query "SELECT ..."  # ask the warehouse a question
+python -m polybot calibrate           # rebuild the calibration report and score the models
 ```
 
 **Upgrading an existing database?** Run `python -m polybot.resolutions --backfill` once. It checks every market that has already ended, rather than 50 per hour.
@@ -426,6 +452,9 @@ polybot/
   streamer.py      the websocket connection: heartbeat, reconnects, batched writes
   warehouse.py     DuckDB views over the Parquet and CSV files; the query command
   rollup.py        daily job: pack days, copy snapshots from SQLite, one-minute bars
+  categories.py    Polymarket tags to one category per market
+  tracker.py       calibration tracker: Brier scores, buckets, models against the market
+  charts.py        the calibration charts (matplotlib)
   storage.py       schema, migrations, snapshot persistence
   pricing.py       executable entry prices from bid/ask
   resolutions.py   resolution sweep: how each market ended
@@ -442,6 +471,8 @@ polybot/
   cli.py           the `polybot` command
   app.py           Streamlit dashboard
 config.yaml        filters and limits (no secrets)
+models/            forecast models, one file each, scored by the tracker
+reports/           the calibration report and its charts (generated, not in git)
 data/              live data and stream status (not in git)
 scripts/           dashboard export, job runners, scheduler installer, health check
 tests/             pytest suite (temporary database, no network)
@@ -451,11 +482,12 @@ tests/fixtures/    real Gamma API responses saved for the parser tests
 ## Testing
 
 ```bash
-pytest          # 302 tests: pricing, storage, signals, settlement, resolutions, calibration,
+pytest          # 337 tests: pricing, storage, signals, settlement, resolutions, calibration,
                 # the agent (Kelly sizing, estimator, risk rules, settlement, learning),
                 # retries, the job lock, health, settings, discovery and the catalog,
                 # the order book, recorder and streamer (fake socket and clock),
                 # the warehouse views, the rollup steps and one-minute bars,
+                # the calibration tracker, the models and the report,
                 # and parsers against saved API and websocket messages
 ruff check .
 ```
@@ -473,6 +505,7 @@ CI runs both on every push and pull request, on Python 3.10 and 3.12.
 - [x] **v2.2** Market catalog: cursor paging, tag-based categories, `config.yaml` filters, stream selection
 - [x] **v2.3** Live websocket recorder: order book tops and trades in daily files, heartbeat, reconnects
 - [x] **v2.4** Warehouse: Parquet by day, DuckDB views, SQLite migration, daily rollup with one-minute bars
+- [x] **v2.5** Calibration tracker: horizons, categories, `models/` folder, charts and Markdown report
 - [ ] **v0.3** Strategy scorecard: P&L, max drawdown and Brier score per strategy, compared with the market baseline
 - [ ] **v0.4** Full-event fetching and a basket executor for neg-risk mispricings
 
@@ -480,7 +513,7 @@ CI runs both on every push and pull request, on Python 3.10 and 3.12.
 
 - **Paper only.** No orders are sent anywhere, and fills assume the full stake executes at the top of book. A trade is skipped when the side it needs has no quote; nothing is ever filled at the midpoint.
 - **Fees are not modelled.** Taker fees would reduce P&L further.
-- **Sample size.** Calibration needs hundreds of resolved markets per horizon before buckets are meaningful; early numbers are noisy.
+- **Sample size.** Calibration needs hundreds of resolved markets per horizon before buckets are meaningful; early numbers are noisy. The price history starts on 2026-10-30, so the 7-day horizon in particular rests on very few markets for now.
 - **Hourly resolution (v1).** Moves inside the hour are invisible to the pipeline, and its momentum signal compares snapshots about 20 to 24 hours apart.
 - **Live data is recorded, not yet used.** The strategies still trade on the 10-minute and hourly snapshots held in SQLite. The warehouse and its one-minute bars are for analysis; nothing reads them to make a trading decision yet.
 - **Two stores for now.** New snapshots are written to SQLite first and copied to the warehouse once a day, so the warehouse's `snapshots` table can be up to a day behind. `book_top` and `trades` are current to the last couple of seconds.

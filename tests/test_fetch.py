@@ -65,6 +65,7 @@ def test_asks_for_open_markets_by_volume(monkeypatch):
     monkeypatch.setattr(fetch.http, "get_json", get_json)
     fetch.fetch_active_markets(limit=1)
     assert (sent["closed"], sent["order"], sent["ascending"], sent["limit"]) == ("false", "volumeNum", "false", 100)
+    assert sent["include_tag"] == "true"
     assert sent["end_date_min"].endswith("Z")
 
 
@@ -88,23 +89,47 @@ def test_first_page_failing_is_an_error(monkeypatch):
         fetch.fetch_active_markets(limit=500)
 
 
-def test_by_id_skips_a_market_that_fails(monkeypatch):
+def by_id_server(monkeypatch, known: set[str], fail_batches: set[int] = frozenset()) -> list[list[str]]:
+    """Answer batched ID lookups with the IDs in ``known``. Returns the batches that were asked for."""
+    batches: list[list[str]] = []
+
     def get_json(url, params=None, **kwargs):
-        if url.endswith("/2"):
-            raise FetchError("HTTP 404")
-        return {"id": url.rsplit("/", 1)[1]}
+        assert url.endswith("/markets/keyset")
+        asked = [value for key, value in params if key == "id"]
+        assert ("closed", "any") in params and ("include_tag", "true") in params
+        batches.append(asked)
+        if len(batches) - 1 in fail_batches:
+            raise FetchError("HTTP 500")
+        return {"markets": [{"id": i} for i in asked if i in known]}
 
     monkeypatch.setattr(fetch.http, "get_json", get_json)
+    return batches
+
+
+def test_by_id_asks_for_fifty_at_a_time(monkeypatch):
+    ids = [str(i) for i in range(120)]
+    batches = by_id_server(monkeypatch, known=set(ids))
+    assert [m["id"] for m in fetch.fetch_markets_by_id(ids)] == ids
+    assert [len(b) for b in batches] == [50, 50, 20]
+
+
+def test_by_id_leaves_out_markets_the_api_does_not_know(monkeypatch):
+    by_id_server(monkeypatch, known={"1", "3"})
     assert [m["id"] for m in fetch.fetch_markets_by_id(["1", "2", "3"])] == ["1", "3"]
 
 
+def test_by_id_skips_a_batch_that_fails_and_carries_on(monkeypatch):
+    ids = [str(i) for i in range(120)]
+    by_id_server(monkeypatch, known=set(ids), fail_batches={1})
+    assert len(fetch.fetch_markets_by_id(ids)) == 70
+
+
 def test_by_id_stops_asking_when_the_api_is_down(monkeypatch):
-    asked = []
+    ids = [str(i) for i in range(1000)]
+    batches = by_id_server(monkeypatch, known=set(ids), fail_batches=set(range(100)))
+    assert fetch.fetch_markets_by_id(ids) == []
+    assert len(batches) == fetch.MAX_BY_ID_FAILURES
 
-    def get_json(url, params=None, **kwargs):
-        asked.append(url)
-        raise FetchError("HTTP 500")
 
-    monkeypatch.setattr(fetch.http, "get_json", get_json)
-    assert fetch.fetch_markets_by_id([str(i) for i in range(50)]) == []
-    assert len(asked) == fetch.MAX_BY_ID_FAILURES
+def test_by_id_with_nothing_to_ask_makes_no_request(monkeypatch):
+    assert fetch.fetch_markets_by_id([]) == [] and by_id_server(monkeypatch, known=set()) == []

@@ -47,3 +47,13 @@ def test_skips_markets_without_id(temp_db):
     m = make_market("1")
     del m["id"]
     assert save_snapshot([m]) == 0
+
+
+def test_category_comes_from_tags_and_survives_a_later_fetch_without_them():
+    from polybot.db import connect
+
+    market = make_market("9")
+    save_snapshot([{**market, "tags": [{"slug": "geopolitics"}, {"slug": "politics"}]}])
+    save_snapshot([market])  # fetched again, this time with no tags
+    with connect() as c:
+        assert c.execute("SELECT category FROM markets WHERE id = '9'").fetchone()[0] == "geopolitics"

@@ -23,12 +23,19 @@ def temp_db(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYBOT_LOG_DIR", str(tmp_path / "logs"))  # tests never write to the real log
     monkeypatch.setenv("POLYBOT_CONFIG", str(tmp_path / "config.yaml"))  # absent, so tests get the defaults
     monkeypatch.setenv("POLYBOT_DATA_DIR", str(tmp_path / "data"))  # live-data files stay out of the project
+    monkeypatch.setenv("POLYBOT_REPORTS_DIR", str(tmp_path / "reports"))
+    monkeypatch.setenv("POLYBOT_MODELS_DIR", str(tmp_path / "models"))  # empty unless a test adds models
+    monkeypatch.setattr("polybot.http._shared_session", _no_network)
     yield path
     # Close any log file a test opened, so the temporary folder can be deleted afterwards.
     root = logging.getLogger()
     for handler in [h for h in root.handlers if getattr(h, "polybot_handler", False)]:
         root.removeHandler(handler)
         handler.close()
+
+
+def _no_network():
+    raise AssertionError("a test tried to use the real network; give it a fake instead")
 
 
 def make_market(mid: str = "1", *, yes: float = 0.5, bid: float | None = None,

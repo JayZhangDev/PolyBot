@@ -22,6 +22,12 @@ DAY = "2026-11-10"
 TODAY = datetime.now(timezone.utc).date().isoformat()
 
 
+@pytest.fixture(autouse=True)
+def no_category_lookups(monkeypatch):
+    """The rollup looks up missing categories over the network; in tests that lookup finds nothing."""
+    monkeypatch.setattr(rollup.resolutions, "fetch_markets_by_id", lambda ids: [])
+
+
 def make_old(path) -> None:
     """Pretend a file was last written an hour ago, so it counts as settled."""
     an_hour_ago = time.time() - 3600
@@ -282,7 +288,8 @@ def test_rollup_job_runs_every_step_and_records_the_run():
     assert run_row == {
         "job": "rollup",
         "status": "success",
-        "summary": "packed 2 day files, copied 2 snapshots, 2 markets, built 3 bars for 1 days",
+        "summary": "packed 2 day files, copied 2 snapshots, 2 markets, built 3 bars for 1 days, "
+        "calibration report rebuilt",
     }
     assert rawstore.csv_days("book_top") == [] and rawstore.parquet_days("book_top") == [DAY]
     assert not any((rawstore.data_dir() / "tmp").iterdir())  # no temp files left behind
@@ -308,3 +315,45 @@ def test_migrate_without_a_database_says_so(capsys, monkeypatch, tmp_path):
 
 def test_yesterday_is_before_today_helper():
     assert (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat() < rollup._today()
+
+
+# --------------------------- categories and the report step ---------------------------
+
+
+def test_markets_without_a_category_get_one_looked_up(monkeypatch):
+    save_snapshot([make_market("1"), make_market("2"), make_market("3")])
+    asked = []
+
+    def lookup(ids):
+        asked.extend(ids)
+        return [{"id": "1", "tags": [{"slug": "nba"}]}, {"id": "2", "tags": []}]  # "3" is unknown to the API
+
+    monkeypatch.setattr(rollup.resolutions, "fetch_markets_by_id", lookup)
+    assert rollup.resolutions.backfill_categories() == {"missing": 3, "filled": 1}
+    assert asked == ["1", "2", "3"]
+    run(rollup.copy_markets)
+    assert ask("SELECT market_id, category FROM markets ORDER BY market_id") == [
+        ("1", "sports"),
+        ("2", None),
+        ("3", None),
+    ]
+
+
+def test_category_lookup_failing_does_not_fail_the_rollup(monkeypatch, caplog):
+    from polybot.http import FetchError
+
+    save_snapshot([make_market("1")])
+    monkeypatch.setattr(
+        rollup.resolutions, "fetch_markets_by_id", lambda ids: (_ for _ in ()).throw(FetchError("HTTP 500"))
+    )
+    with caplog.at_level("WARNING"):
+        assert rollup.main() == 0
+    assert "Could not look up missing categories" in caplog.text
+
+
+def test_rollup_rebuilds_the_calibration_report():
+    from polybot import tracker
+
+    save_snapshot([make_market("1")])
+    assert rollup.main() == 0
+    assert (tracker.reports_dir() / "calibration.md").exists() and (tracker.reports_dir() / "calibration.json").exists()

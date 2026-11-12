@@ -1,10 +1,12 @@
 """SQLite persistence for market metadata and price snapshots."""
+
 from __future__ import annotations
 
 import json
 import sqlite3
 from datetime import datetime, timezone
 
+from polybot.categories import category_of
 from polybot.db import connect
 
 # Columns added after v0.1. init_db() adds them to existing databases in place,
@@ -100,8 +102,7 @@ def _event_info(market: dict) -> tuple[str | None, int | None]:
     ev = events[0]
     event_id = ev.get("id")
     neg_risk = ev.get("negRisk")
-    return (str(event_id) if event_id is not None else None,
-            int(bool(neg_risk)) if neg_risk is not None else None)
+    return (str(event_id) if event_id is not None else None, int(bool(neg_risk)) if neg_risk is not None else None)
 
 
 def save_snapshot(markets: list[dict]) -> int:
@@ -116,29 +117,53 @@ def save_snapshot(markets: list[dict]) -> int:
                 continue
             event_id, neg_risk = _event_info(m)
 
-            c.execute("""
+            c.execute(
+                """
                 INSERT INTO markets (id, question, slug, category, end_date, first_seen, last_seen,
                                      raw_json, event_id, neg_risk)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     question=excluded.question,
                     slug=excluded.slug,
-                    category=excluded.category,
+                    category=COALESCE(excluded.category, markets.category),
                     end_date=excluded.end_date,
                     last_seen=excluded.last_seen,
                     raw_json=excluded.raw_json,
                     event_id=excluded.event_id,
                     neg_risk=excluded.neg_risk
-            """, (mid, m.get("question", ""), m.get("slug"), m.get("category"), m.get("endDate"),
-                  now, now, json.dumps(m), event_id, neg_risk))
+            """,
+                (
+                    mid,
+                    m.get("question", ""),
+                    m.get("slug"),
+                    category_of(m),
+                    m.get("endDate"),
+                    now,
+                    now,
+                    json.dumps(m),
+                    event_id,
+                    neg_risk,
+                ),
+            )
 
             yes_p, no_p = _parse_yes_no_prices(m)
-            c.execute("""
+            c.execute(
+                """
                 INSERT INTO snapshots (market_id, captured_at, volume, liquidity,
                                        yes_price, no_price, best_bid, best_ask)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (mid, now, _float(m.get("volume")), _float(m.get("liquidity")),
-                  yes_p, no_p, _float(m.get("bestBid")), _float(m.get("bestAsk"))))
+            """,
+                (
+                    mid,
+                    now,
+                    _float(m.get("volume")),
+                    _float(m.get("liquidity")),
+                    yes_p,
+                    no_p,
+                    _float(m.get("bestBid")),
+                    _float(m.get("bestAsk")),
+                ),
+            )
             saved += 1
     return saved
 

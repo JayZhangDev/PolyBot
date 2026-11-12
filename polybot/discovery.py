@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 
 from polybot import http, rawstore
 from polybot.catalog import MarketMeta, save_catalog, select_stream_markets
+from polybot.categories import CATEGORY_TAGS, category_from_tags, tag_slugs
 from polybot.config import Settings, load_settings
 from polybot.fetch import GAMMA_BASE
 from polybot.http import FetchError
@@ -32,34 +33,7 @@ MAX_PAGES = 1500  # safety stop (150,000 markets) in case a cursor ever loops
 LOCK_WAIT_SECONDS = 600
 
 log = logging.getLogger("polybot.discovery")
-
-# Which of Polymarket's tags decides a market's category. A market carries many
-# tags ("Politics", "Trump", "Middle East", ...), so the list is checked in
-# order and the first category with a matching tag wins. Narrow categories come
-# before broad ones: an Iran market tagged both "geopolitics" and "politics" is
-# geopolitics, and a "Bitcoin" market tagged "finance" too is crypto.
-CATEGORY_TAGS: tuple[tuple[str, frozenset[str]], ...] = (
-    ("sports", frozenset({"sports", "esports", "football", "nfl", "nba", "mlb", "nhl", "soccer", "tennis"})),
-    ("crypto", frozenset({"crypto", "crypto-prices"})),
-    ("weather", frozenset({"weather"})),
-    ("mentions", frozenset({"mentions"})),
-    ("geopolitics", frozenset({"geopolitics"})),
-    ("politics", frozenset({"politics", "elections", "world-elections", "global-elections"})),
-    ("economics", frozenset({"economy", "economics", "fed", "fomc", "federal-reserve", "inflation"})),
-    ("finance", frozenset({"finance", "business", "stocks", "commodities", "ipos"})),
-    ("tech", frozenset({"tech", "ai"})),
-    ("science", frozenset({"science", "space"})),
-    ("culture", frozenset({"culture", "pop-culture", "movies", "music"})),
-)
-
-
-def category_from_tags(tag_slugs: tuple[str, ...]) -> str:
-    """Pick one category for a market from its tag slugs; "other" when none match."""
-    present = set(tag_slugs)
-    for category, slugs in CATEGORY_TAGS:
-        if present & slugs:
-            return category
-    return "other"
+__all__ = ["CATEGORY_TAGS", "category_from_tags", "fetch_open_markets", "main", "parse_market"]
 
 
 def _json_list(value: object) -> tuple[str, ...]:
@@ -79,17 +53,12 @@ def _number(value: object) -> float:
         return 0.0
 
 
-def _tag_slugs(market: dict) -> tuple[str, ...]:
-    tags = market.get("tags") or []
-    return tuple(str(t["slug"]).lower() for t in tags if isinstance(t, dict) and t.get("slug"))
-
-
 def parse_market(market: dict) -> MarketMeta | None:
     """Turn one Gamma API market into a :class:`MarketMeta`; None if it has no ID or question."""
     market_id, question = market.get("id"), market.get("question")
     if market_id is None or not question:
         return None
-    tags = _tag_slugs(market)
+    tags = tag_slugs(market)
     return MarketMeta(
         market_id=str(market_id),
         condition_id=market.get("conditionId") or None,

@@ -19,6 +19,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("rollup", help="pack finished days, copy new snapshots from SQLite and build one-minute bars")
     sub.add_parser("migrate", help="copy the existing SQLite data into the warehouse and report the counts")
     sub.add_parser("query", help='ask the warehouse a question: polybot query "SELECT ..."')
+    sub.add_parser("calibrate", help="rebuild the calibration report and score the models against the market")
     sub.add_parser("pipeline", help="run one hourly cycle now")
     sub.add_parser("agent", help="run one agent cycle now (extra options are passed through)")
     args, rest = parser.parse_known_args(argv)
@@ -44,6 +45,10 @@ def main(argv: list[str] | None = None) -> int:
         from polybot import rollup
 
         return rollup.main() if args.command == "rollup" else rollup.migrate()
+    if args.command == "calibrate":
+        from polybot.tracker import main as calibrate_main
+
+        return calibrate_main()
     if args.command == "query":
         from polybot.warehouse import main as query_main
 
