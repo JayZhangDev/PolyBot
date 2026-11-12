@@ -110,3 +110,25 @@ def test_stream_section_when_the_status_is_stale_or_stopped():
     assert "NOT RUNNING" in health.format_report(health.collect())
     stream_status(age_seconds=2, state="stopped")
     assert health.collect()["stream"]["running"] is False
+
+
+# --------------------------- disk usage ---------------------------
+
+
+def test_disk_usage_is_listed_per_day_newest_first():
+    from polybot import rawstore
+
+    rawstore.append_rows("trades", ("ts", "x"), [("2026-11-10T00:00:01.000Z", "y" * 1_000_000)])
+    rawstore.append_rows("book_top", ("ts", "x"), [("2026-11-11T00:00:01.000Z", "y" * 3_000_000)])
+    save_snapshot([make_market("1")])
+    report = health.collect()
+    assert [d["day"] for d in report["disk"]["days"]] == ["2026-11-11", "2026-11-10"]
+    assert report["disk"]["data_bytes"] > 4_000_000 and report["disk"]["sqlite_bytes"] > 0
+    text = health.format_report(report)
+    assert "Disk usage by day (UTC), newest first:" in text
+    assert "2026-11-11     3.0 MB   book_top 3.0 MB, trades 0.0 MB, snapshots 0.0 MB, bars 0.0 MB" in text
+    assert "All of data/ : 4.0 MB" in text
+
+
+def test_disk_usage_with_no_data_yet():
+    assert "no data files yet" in health.format_report(health.collect())

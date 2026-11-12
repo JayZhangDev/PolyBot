@@ -20,6 +20,7 @@ The core question throughout is **how well prediction-market prices forecast out
 | **v2.1** | Hardening: retries, run lock, rotating log, `polybot health` | Ride out API errors, record every run, and show at a glance whether data is still arriving |
 | **v2.2** | Market catalog, tag-based categories, `config.yaml` | Know every open market above the floors, and choose which ones to stream |
 | **v2.3** | Live websocket recorder ([`polybot/streamer.py`](polybot/streamer.py)) | Record order books and every trade for the selected markets as they happen |
+| **v2.4** | Warehouse: Parquet files queried with DuckDB, daily rollup | Keep months of live data small, and answer questions over all of it in well under a second |
 
 The hourly pipeline is unchanged. The agent runs beside it, shares its market, snapshot and resolution tables, and keeps its own positions and bankroll so the two strategies can be compared cleanly. The git history shows each step.
 
@@ -129,7 +130,7 @@ The export also writes `paper_pnl.txt` (git-ignored): the agent's paper P&L, equ
 
 ### Running it on a schedule (Windows + WSL)
 
-The four jobs run as Windows scheduled tasks that call into WSL. One script installs them:
+The five jobs run as Windows scheduled tasks that call into WSL. One script installs them:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
@@ -142,7 +143,9 @@ powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
 | `PolyBot-Discover` | every 15 minutes | [`scripts/run_discover.sh`](scripts/run_discover.sh): refresh the market catalog |
 | `PolyBot-Stream` | all the time | [`scripts/run_stream.sh`](scripts/run_stream.sh): the live recorder. Its trigger fires at login and every 5 minutes; extra starts are ignored while it runs, so the trigger also restarts it if it dies |
 
-**Reloading.** After editing `install_tasks.ps1`, run the same command again; it replaces all four tasks. Code changes need no reload, because each run starts a fresh Python process.
+| `PolyBot-Rollup` | once a day, about two hours after midnight UTC | [`scripts/run_rollup.sh`](scripts/run_rollup.sh): pack finished days into Parquet, copy new snapshots from SQLite, build one-minute bars |
+
+**Reloading.** After editing `install_tasks.ps1`, run the same command again; it replaces all five tasks. Code changes need no reload, because each run starts a fresh Python process.
 
 ```powershell
 Get-ScheduledTask PolyBot-* | Disable-ScheduledTask      # pause
@@ -291,6 +294,47 @@ powershell -ExecutionPolicy Bypass -File scripts\stream.ps1 start
 
 `python -m polybot stream` runs it by hand; a second copy notices the first and exits. `polybot health` shows a "Live stream" block: state, markets, seconds since the last message, today's trades, book rows and reconnects, and the size of today's files.
 
+## The warehouse: Parquet and DuckDB
+
+Live data grows quickly, so it is stored for analysis rather than for one-row-at-a-time lookups.
+
+- **Parquet** is a file format that stores a table column by column and compresses it. The 359 MB SQLite history of price snapshots is 27 MB as Parquet.
+- **DuckDB** is a database engine that runs inside Python and reads whole columns at a time. There is no DuckDB database file: each connection creates views over the files, so the streamer, the jobs and a person asking a question never contend for one file.
+
+```
+data/raw/book_top/2026-11-12.csv                   today, still being appended to
+data/raw/book_top/date=2026-11-11/data.parquet     a finished day, packed
+data/raw/trades/...                                the same two forms
+data/raw/snapshots/date=2026-11-11/part-*.parquet  price snapshots copied from SQLite
+data/raw/markets/markets.parquet                   one row per market
+data/bars/bars_1m/date=2026-11-11/data.parquet     one-minute bars
+```
+
+| Table | What it holds |
+|---|---|
+| `book_top` | top of each order book over time (today's CSV and every packed day, as one table) |
+| `trades` | every trade (same) |
+| `snapshots` | the 10-minute and hourly price snapshots, back to the first run |
+| `markets` | question, category, end date, tokens, and the outcome once resolved |
+| `bars_1m` | one row per market per minute: open, high, low and close of the midpoint, average spread, volume in shares and dollars, trade count |
+
+**The daily rollup** ([`polybot/rollup.py`](polybot/rollup.py)) has four steps, each safe to run again:
+
+1. **Pack.** A finished day's CSV is rewritten as Parquet. The CSV is deleted only if the row counts match.
+2. **Copy snapshots.** Rows added to SQLite since the last run are copied in. SQLite is opened read-only and never changed.
+3. **Copy markets.** The `markets` file is rewritten from the catalog, the snapshot history and the recorded outcomes.
+4. **Bars.** Any day whose data changed gets its one-minute bars rebuilt. A minute with trades but no change at the top of the book carries the previous close.
+
+**Migrating existing data.** `python -m polybot migrate` runs the same copy by hand and prints the row counts on both sides. `polybot.db` stays where it is; the pipeline, the agent and the paper traders still use it as their working database.
+
+```bash
+python -m polybot rollup      # run the four steps now
+python -m polybot migrate     # the first copy, with a comparison report
+python -m polybot query "SELECT market_id, COUNT(*) AS trades, SUM(size) AS shares FROM trades GROUP BY 1 ORDER BY 2 DESC LIMIT 5"
+```
+
+`query` accepts questions only (`SELECT`, `WITH`, `DESCRIBE`, `SHOW`, `SUMMARIZE`). `polybot health` lists disk usage per day and per table.
+
 ## Strategies (v1 pipeline)
 
 | Strategy | Rule | Rationale |
@@ -324,6 +368,8 @@ python -m polybot health              # last fetch, rows added in 24 hours, rece
 python -m polybot discover            # refresh the market catalog
 python -m polybot markets             # what config.yaml selects for streaming
 python -m polybot stream              # record live order books and trades until stopped
+python -m polybot rollup              # pack finished days, copy snapshots, build one-minute bars
+python -m polybot query "SELECT ..."  # ask the warehouse a question
 ```
 
 **Upgrading an existing database?** Run `python -m polybot.resolutions --backfill` once. It checks every market that has already ended, rather than 50 per hour.
@@ -378,6 +424,8 @@ polybot/
   recorder.py      websocket messages in, book_top and trade rows out
   rawstore.py      one CSV per table per day under data/raw, plus status files
   streamer.py      the websocket connection: heartbeat, reconnects, batched writes
+  warehouse.py     DuckDB views over the Parquet and CSV files; the query command
+  rollup.py        daily job: pack days, copy snapshots from SQLite, one-minute bars
   storage.py       schema, migrations, snapshot persistence
   pricing.py       executable entry prices from bid/ask
   resolutions.py   resolution sweep: how each market ended
@@ -403,10 +451,11 @@ tests/fixtures/    real Gamma API responses saved for the parser tests
 ## Testing
 
 ```bash
-pytest          # 274 tests: pricing, storage, signals, settlement, resolutions, calibration,
+pytest          # 302 tests: pricing, storage, signals, settlement, resolutions, calibration,
                 # the agent (Kelly sizing, estimator, risk rules, settlement, learning),
                 # retries, the job lock, health, settings, discovery and the catalog,
                 # the order book, recorder and streamer (fake socket and clock),
+                # the warehouse views, the rollup steps and one-minute bars,
                 # and parsers against saved API and websocket messages
 ruff check .
 ```
@@ -423,6 +472,7 @@ CI runs both on every push and pull request, on Python 3.10 and 3.12.
 - [x] **v2.1** Hardening: retries with backoff, job lock, run records, rotating log, `polybot health`
 - [x] **v2.2** Market catalog: cursor paging, tag-based categories, `config.yaml` filters, stream selection
 - [x] **v2.3** Live websocket recorder: order book tops and trades in daily files, heartbeat, reconnects
+- [x] **v2.4** Warehouse: Parquet by day, DuckDB views, SQLite migration, daily rollup with one-minute bars
 - [ ] **v0.3** Strategy scorecard: P&L, max drawdown and Brier score per strategy, compared with the market baseline
 - [ ] **v0.4** Full-event fetching and a basket executor for neg-risk mispricings
 
@@ -432,7 +482,8 @@ CI runs both on every push and pull request, on Python 3.10 and 3.12.
 - **Fees are not modelled.** Taker fees would reduce P&L further.
 - **Sample size.** Calibration needs hundreds of resolved markets per horizon before buckets are meaningful; early numbers are noisy.
 - **Hourly resolution (v1).** Moves inside the hour are invisible to the pipeline, and its momentum signal compares snapshots about 20 to 24 hours apart.
-- **Live data is recorded, not yet used.** The strategies still trade on the 10-minute and hourly snapshots. The websocket files are raw CSV; packing them into a compact format and building minute bars comes next.
+- **Live data is recorded, not yet used.** The strategies still trade on the 10-minute and hourly snapshots held in SQLite. The warehouse and its one-minute bars are for analysis; nothing reads them to make a trading decision yet.
+- **Two stores for now.** New snapshots are written to SQLite first and copied to the warehouse once a day, so the warehouse's `snapshots` table can be up to a day behind. `book_top` and `trades` are current to the last couple of seconds.
 - **Agent evidence.** The agent's recency signal needs 24 hours of its own 10-minute snapshots before it contributes, and its calibration priors need many resolved markets before they move from the documented defaults.
 - **Coverage.** The pipeline snapshots the 500 highest-volume open markets each hour, plus any market currently held. The agent scans up to 2,000. The catalog knows every open market above the floors in `config.yaml`, but it stores metadata only; prices are still recorded by the pipeline and the agent.
 

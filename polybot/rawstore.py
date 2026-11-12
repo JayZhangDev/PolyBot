@@ -1,16 +1,22 @@
-"""Files for live data: one CSV per table per day, plus two small JSON files.
+"""Where the data files live, and the plain-file operations on them (no DuckDB needed here).
 
 Layout, under ``data/`` (never committed to git)::
 
-    data/raw/book_top/2026-11-12.csv     top of the order book over time
-    data/raw/trades/2026-11-12.csv       every trade
-    data/stream_selection.json           which markets to stream (written by discovery)
-    data/stream_status.json              what the streamer is doing right now
+    data/raw/book_top/2026-11-12.csv                  today's live rows, still growing
+    data/raw/book_top/date=2026-11-11/data.parquet    a finished day, packed
+    data/raw/trades/...                               the same two forms
+    data/raw/snapshots/date=2026-11-11/part-*.parquet the 10-minute and hourly price snapshots
+    data/raw/markets/markets.parquet                  one row per market
+    data/bars/bars_1m/date=2026-11-11/data.parquet    one-minute bars
+    data/stream_selection.json                        which markets to stream (written by discovery)
+    data/stream_status.json                           what the streamer is doing right now
 
-Live data is only ever *added*, so plain files that grow at the end are the
-simplest safe store: no locking against the hourly jobs, and a crash can lose
-at most the last couple of seconds. Days are in UTC. These files are the raw
-record; a later step packs them into a compact, query-friendly format.
+Live data is only ever *added*, so the streamer appends to a plain CSV: no
+locking against the other jobs, and a crash can lose at most the last couple of
+seconds. Once a day is over, the rollup job packs its CSV into Parquet, a
+column-by-column compressed format that is several times smaller and much
+faster to query. Folders named ``date=...`` are how DuckDB recognises the day
+without opening the file. Days are in UTC.
 """
 
 from __future__ import annotations
@@ -24,7 +30,9 @@ from pathlib import Path
 
 from polybot.db import PROJECT_ROOT
 
-TABLES = ("book_top", "trades")
+TABLES = ("book_top", "trades")  # written live by the streamer, as CSV
+DAY_TABLES = ("book_top", "trades", "snapshots")  # everything stored one folder per day
+USAGE_TABLES = (*DAY_TABLES, "bars")  # what the disk-usage report lists
 
 
 def data_dir() -> Path:
@@ -76,9 +84,61 @@ def count_rows(table: str, day: str) -> int:
         return max(0, sum(chunk.count(b"\n") for chunk in iter(lambda: f.read(1 << 20), b"")) - 1)
 
 
+def partition_dir(table: str, day: str) -> Path:
+    """The folder holding a table's Parquet files for one day, e.g. ``data/raw/trades/date=2026-11-12``."""
+    return data_dir() / "raw" / table / f"date={day}"
+
+
+def bars_dir(day: str) -> Path:
+    """The folder holding the one-minute bars for one day."""
+    return data_dir() / "bars" / "bars_1m" / f"date={day}"
+
+
+def markets_file() -> Path:
+    return data_dir() / "raw" / "markets" / "markets.parquet"
+
+
+def csv_days(table: str) -> list[str]:
+    """Days that have a CSV file for ``table``, oldest first."""
+    folder = data_dir() / "raw" / table
+    return sorted(p.stem for p in folder.glob("????-??-??.csv")) if folder.exists() else []
+
+
+def parquet_days(table: str) -> list[str]:
+    """Days that have at least one Parquet file for ``table``, oldest first."""
+    folder = data_dir() / "raw" / table
+    if not folder.exists():
+        return []
+    return sorted(p.name[len("date=") :] for p in folder.glob("date=*") if any(p.glob("*.parquet")))
+
+
+def _folder_bytes(folder: Path) -> int:
+    return sum(p.stat().st_size for p in folder.glob("*.parquet")) if folder.exists() else 0
+
+
+def table_day_bytes(table: str, day: str) -> int:
+    """Bytes on disk for one table on one day: its CSV (if any) plus its Parquet files."""
+    if table == "bars":
+        return _folder_bytes(bars_dir(day))
+    csv_file = raw_file(table, day)
+    return (csv_file.stat().st_size if csv_file.exists() else 0) + _folder_bytes(partition_dir(table, day))
+
+
 def day_bytes(day: str) -> dict[str, int]:
-    """Size on disk of each table's file for a day: ``{"book_top": 1234, "trades": 56}``."""
-    return {table: raw_file(table, day).stat().st_size if raw_file(table, day).exists() else 0 for table in TABLES}
+    """Size on disk of each table for a day: ``{"book_top": 1234, "trades": 56, ...}``."""
+    return {table: table_day_bytes(table, day) for table in USAGE_TABLES}
+
+
+def usage_days() -> list[str]:
+    """Every day that has any data file, oldest first."""
+    days: set[str] = set()
+    for table in DAY_TABLES:
+        days.update(csv_days(table))
+        days.update(parquet_days(table))
+    bars_root = data_dir() / "bars" / "bars_1m"
+    if bars_root.exists():
+        days.update(p.name[len("date=") :] for p in bars_root.glob("date=*"))
+    return sorted(days)
 
 
 def write_json_atomic(path: Path, payload: object) -> None:

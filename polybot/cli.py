@@ -16,6 +16,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("discover", help="refresh the catalog of open markets now")
     sub.add_parser("markets", help="show the catalog and which markets the settings select for streaming")
     sub.add_parser("stream", help="record live order books and trades from the websocket until stopped")
+    sub.add_parser("rollup", help="pack finished days, copy new snapshots from SQLite and build one-minute bars")
+    sub.add_parser("migrate", help="copy the existing SQLite data into the warehouse and report the counts")
+    sub.add_parser("query", help='ask the warehouse a question: polybot query "SELECT ..."')
     sub.add_parser("pipeline", help="run one hourly cycle now")
     sub.add_parser("agent", help="run one agent cycle now (extra options are passed through)")
     args, rest = parser.parse_known_args(argv)
@@ -37,6 +40,14 @@ def main(argv: list[str] | None = None) -> int:
         from polybot.streamer import main as stream_main
 
         return stream_main()
+    if args.command in ("rollup", "migrate"):
+        from polybot import rollup
+
+        return rollup.main() if args.command == "rollup" else rollup.migrate()
+    if args.command == "query":
+        from polybot.warehouse import main as query_main
+
+        return query_main(rest)
     if args.command == "pipeline":
         from polybot.pipeline import main as pipeline_main
 

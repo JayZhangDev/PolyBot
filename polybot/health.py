@@ -26,6 +26,7 @@ STALE_AFTER_MINUTES = 30  # the agent writes every 10 minutes, so half an hour o
 WINDOW_HOURS = 24
 MAX_ERRORS_SHOWN = 5
 STREAM_FRESH_SECONDS = 45  # the streamer rewrites its status every 10 seconds
+DISK_DAYS_SHOWN = 7
 
 
 def _job_stats(c: sqlite3.Connection, cutoff: str) -> dict[str, dict]:
@@ -103,7 +104,23 @@ def collect(now: datetime | None = None) -> dict:
         report["minutes_since_fetch"] is not None and report["minutes_since_fetch"] <= STALE_AFTER_MINUTES
     )
     report["stream"] = stream_report(now)
+    report["disk"] = disk_report()
     return report
+
+
+def disk_report(days: int = DISK_DAYS_SHOWN) -> dict:
+    """Bytes on disk per day and per table for the most recent days, plus the two totals.
+
+    Only file sizes are read, so this stays quick however much data there is.
+    """
+    recent = rawstore.usage_days()[-days:]
+    data = rawstore.data_dir()
+    total = sum(p.stat().st_size for p in data.rglob("*") if p.is_file()) if data.exists() else 0
+    return {
+        "days": [{"day": day, "bytes": rawstore.day_bytes(day)} for day in reversed(recent)],
+        "data_bytes": total,
+        "sqlite_bytes": db_path().stat().st_size if db_path().exists() else 0,
+    }
 
 
 def _seconds_since(stamp: object, now: datetime) -> float | None:
@@ -165,6 +182,7 @@ def format_report(r: dict) -> str:
         lines.append(f"  {_when(e['started_at'])}  {e['job']:<9} {(e['error'] or 'no message')[:110]}")
 
     lines += ["", *_stream_lines(r.get("stream"))]
+    lines += ["", *_disk_lines(r["disk"])]
     lines += [
         "",
         f"Database   : {db_path()}",
@@ -177,6 +195,21 @@ def format_report(r: dict) -> str:
 
 def _megabytes(size: int) -> str:
     return f"{size / 1_000_000:.1f} MB"
+
+
+def _disk_lines(disk: dict) -> list[str]:
+    """The "Disk usage" block: one line per day, newest first, then the totals."""
+    lines = ["Disk usage by day (UTC), newest first:"]
+    if not disk["days"]:
+        lines.append("  no data files yet")
+    for entry in disk["days"]:
+        sizes = entry["bytes"]
+        detail = ", ".join(f"{table} {_megabytes(size)}" for table, size in sizes.items())
+        lines.append(f"  {entry['day']}  {_megabytes(sum(sizes.values())):>9}   {detail}")
+    lines.append(
+        f"  All of data/ : {_megabytes(disk['data_bytes'])}    SQLite database : {_megabytes(disk['sqlite_bytes'])}"
+    )
+    return lines
 
 
 def _stream_lines(s: dict | None) -> list[str]:
@@ -196,7 +229,7 @@ def _stream_lines(s: dict | None) -> list[str]:
         f"  Last message   : {'never' if quiet is None else f'{quiet:.0f}s ago'}",
         f"  Today (UTC)    : {s.get('trades_today', 0):,} trades, {s.get('book_rows_today', 0):,} book rows, "
         f"{s.get('reconnects_today', 0)} reconnects",
-        f"  Raw data today : {_megabytes(sum(sizes.values()))} "
+        f"  Raw data today : {_megabytes(sizes['book_top'] + sizes['trades'])} "
         f"(book_top {_megabytes(sizes['book_top'])}, trades {_megabytes(sizes['trades'])})",
     ]
     last = s.get("last_disconnect")

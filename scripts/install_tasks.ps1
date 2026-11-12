@@ -1,13 +1,19 @@
-# Registers PolyBot's four Windows scheduled tasks. All run inside WSL.
+# Registers PolyBot's five Windows scheduled tasks. All run inside WSL.
 #
 #   PolyBot-Hourly     the pipeline, once an hour at five past
 #   PolyBot-Agent      the paper-trading agent, every 10 minutes
 #   PolyBot-Discover   the market catalog refresh, every 15 minutes
 #   PolyBot-Stream     the live websocket recorder, which runs all the time
+#   PolyBot-Rollup     the daily rollup: pack finished days, copy snapshots, build bars
 #
-# Install, or reload after changing this file (safe to run again; it replaces all four):
+# Install, or reload after changing this file (safe to run again; it replaces all five):
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
+#
+# Register just one or two (replacing PolyBot-Stream while it runs stops the streamer for a few
+# minutes, so leave it out when only another task changed):
+#
+#   powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1 -Only PolyBot-Rollup
 #
 # Stop and start without removing them:
 #
@@ -24,7 +30,8 @@
 param(
     [string]$Distro = "Ubuntu",
     [string]$WslProject = "/mnt/c/Users/$env:USERNAME/PolyBot",
-    [string]$Venv = '$HOME/venvs/polybot/bin/python'
+    [string]$Venv = '$HOME/venvs/polybot/bin/python',
+    [string[]]$Only = @()
 )
 
 function Register-PolyBotTask {
@@ -60,17 +67,43 @@ function Register-PolyBotTask {
     Write-Host "Registered '$Name': every $EveryMinutes minutes via WSL ($Distro)."
 }
 
+function Test-Wanted([string]$Name) {
+    # With no -Only, every task is registered. With -Only, just the ones named.
+    return ($Only.Count -eq 0) -or ($Only -contains $Name)
+}
+
 # The hourly task starts at five past so it does not collide with the agent's run on the hour.
 # It may wake a sleeping PC once an hour; the agent may not, or the PC would never stay asleep.
-Register-PolyBotTask -Name "PolyBot-Hourly" -Script "run_pipeline.sh" -EveryMinutes 60 -StartMinute 5 `
-    -LimitMinutes 30 -Wake $true -Description "PolyBot hourly pipeline: snapshot, resolutions, paper trades (WSL)"
-Register-PolyBotTask -Name "PolyBot-Agent" -Script "run_agent.sh" -EveryMinutes 10 -StartMinute 0 `
-    -LimitMinutes 9 -Wake $false -Description "PolyBot v2 paper-trading agent, every 10 minutes (WSL)"# The catalog refresh starts at 7, 22, 37 and 52 past, between the other two jobs. Its download
+if (Test-Wanted "PolyBot-Hourly") {
+    Register-PolyBotTask -Name "PolyBot-Hourly" -Script "run_pipeline.sh" -EveryMinutes 60 -StartMinute 5 `
+        -LimitMinutes 30 -Wake $true -Description "PolyBot hourly pipeline: snapshot, resolutions, paper trades (WSL)"
+}
+if (Test-Wanted "PolyBot-Agent") {
+    Register-PolyBotTask -Name "PolyBot-Agent" -Script "run_agent.sh" -EveryMinutes 10 -StartMinute 0 `
+        -LimitMinutes 9 -Wake $false -Description "PolyBot v2 paper-trading agent, every 10 minutes (WSL)"
+}
+
+# The catalog refresh starts at 7, 22, 37 and 52 past, between the other two jobs. Its download
 # happens before it takes the database lock, so it only holds the others up for a few seconds.
-Register-PolyBotTask -Name "PolyBot-Discover" -Script "run_discover.sh" -EveryMinutes 15 -StartMinute 7 `
-    -LimitMinutes 14 -Wake $false -Description "PolyBot market catalog refresh, every 15 minutes (WSL)"
+if (Test-Wanted "PolyBot-Discover") {
+    Register-PolyBotTask -Name "PolyBot-Discover" -Script "run_discover.sh" -EveryMinutes 15 -StartMinute 7 `
+        -LimitMinutes 14 -Wake $false -Description "PolyBot market catalog refresh, every 15 minutes (WSL)"
+}
+
 # The streamer never finishes, so it has no time limit (0 means unlimited). Its trigger fires at login
 # and then every 5 minutes: while the streamer is running the extra starts are ignored, and if it has
 # died one of them brings it back. That makes the trigger a watchdog as well as a starter.
-Register-PolyBotTask -Name "PolyBot-Stream" -Script "run_stream.sh" -EveryMinutes 5 -StartMinute 1 `
-    -LimitMinutes 0 -Wake $false -Description "PolyBot live order book and trade recorder (WSL websocket)"
+if (Test-Wanted "PolyBot-Stream") {
+    Register-PolyBotTask -Name "PolyBot-Stream" -Script "run_stream.sh" -EveryMinutes 5 -StartMinute 1 `
+        -LimitMinutes 0 -Wake $false -Description "PolyBot live order book and trade recorder (WSL websocket)"
+}
+
+# The rollup runs once a day, a couple of hours after midnight UTC, so the day it packs is over.
+# Task Scheduler works in local time, so that moment is converted to this PC's clock here. A
+# daylight-saving change moves it by an hour, which still leaves it after midnight UTC.
+if (Test-Wanted "PolyBot-Rollup") {
+    $rollupLocal = [datetime]::SpecifyKind([datetime]::UtcNow.Date.AddHours(2).AddMinutes(10), 'Utc').ToLocalTime()
+    Register-PolyBotTask -Name "PolyBot-Rollup" -Script "run_rollup.sh" -EveryMinutes 1440 `
+        -StartMinute ($rollupLocal.Hour * 60 + $rollupLocal.Minute) -LimitMinutes 60 -Wake $false `
+        -Description "PolyBot daily rollup: Parquet packing, snapshot copy, one-minute bars (WSL)"
+}
