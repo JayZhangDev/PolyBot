@@ -1,20 +1,21 @@
-# Registers PolyBot's two Windows scheduled tasks. Both run inside WSL.
+# Registers PolyBot's three Windows scheduled tasks. All run inside WSL.
 #
-#   PolyBot-Hourly   the pipeline, once an hour at five past
-#   PolyBot-Agent    the paper-trading agent, every 10 minutes
+#   PolyBot-Hourly     the pipeline, once an hour at five past
+#   PolyBot-Agent      the paper-trading agent, every 10 minutes
+#   PolyBot-Discover   the market catalog refresh, every 15 minutes
 #
-# Install, or reload after changing this file (safe to run again; it replaces both tasks):
+# Install, or reload after changing this file (safe to run again; it replaces all three):
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
 #
 # Stop and start without removing them:
 #
-#   Disable-ScheduledTask PolyBot-Hourly, PolyBot-Agent
-#   Enable-ScheduledTask  PolyBot-Hourly, PolyBot-Agent
+#   Get-ScheduledTask PolyBot-* | Disable-ScheduledTask
+#   Get-ScheduledTask PolyBot-* | Enable-ScheduledTask
 #
 # Remove them:
 #
-#   Unregister-ScheduledTask PolyBot-Hourly, PolyBot-Agent -Confirm:$false
+#   Get-ScheduledTask PolyBot-* | Unregister-ScheduledTask -Confirm:$false
 #
 # The tasks survive a reboot: they start again as soon as you log in, and a run that was
 # missed while the PC was off runs straight away. They cannot run while the PC is asleep
@@ -63,4 +64,7 @@ function Register-PolyBotTask {
 Register-PolyBotTask -Name "PolyBot-Hourly" -Script "run_pipeline.sh" -EveryMinutes 60 -StartMinute 5 `
     -LimitMinutes 30 -Wake $true -Description "PolyBot hourly pipeline: snapshot, resolutions, paper trades (WSL)"
 Register-PolyBotTask -Name "PolyBot-Agent" -Script "run_agent.sh" -EveryMinutes 10 -StartMinute 0 `
-    -LimitMinutes 9 -Wake $false -Description "PolyBot v2 paper-trading agent, every 10 minutes (WSL)"
+    -LimitMinutes 9 -Wake $false -Description "PolyBot v2 paper-trading agent, every 10 minutes (WSL)"# The catalog refresh starts at 7, 22, 37 and 52 past, between the other two jobs. Its download
+# happens before it takes the database lock, so it only holds the others up for a few seconds.
+Register-PolyBotTask -Name "PolyBot-Discover" -Script "run_discover.sh" -EveryMinutes 15 -StartMinute 7 `
+    -LimitMinutes 14 -Wake $false -Description "PolyBot market catalog refresh, every 15 minutes (WSL)"

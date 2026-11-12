@@ -153,7 +153,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _start_run(job: str) -> int:
+def _start_run(job: str, started_at: str) -> int:
     """Record that a run began. Must be called while holding the lock.
 
     Because we hold the lock, no other job can be mid-run, so any row still
@@ -166,7 +166,7 @@ def _start_run(job: str) -> int:
             "UPDATE job_runs SET status = 'failed', finished_at = ?, error = ? WHERE status = 'running'",
             (_now(), INTERRUPTED),
         )
-        cur = c.execute("INSERT INTO job_runs (job, started_at, status) VALUES (?, ?, 'running')", (job, _now()))
+        cur = c.execute("INSERT INTO job_runs (job, started_at, status) VALUES (?, ?, 'running')", (job, started_at))
         return int(cur.lastrowid)
 
 
@@ -178,14 +178,28 @@ def _finish_run(run_id: int, status: str, summary: str | None = None, error: str
         )
 
 
-def run_job(job: str, work: Callable[[], str], *, wait_seconds: float = 300) -> int:
+def run_job(
+    job: str, work: Callable[..., str], *, prepare: Callable[[], object] | None = None, wait_seconds: float = 300
+) -> int:
     """Run one scheduled job safely. Returns a process exit code: 0 fine, 1 failed.
 
     ``work`` does the real job and returns a one-line summary. Whatever happens
     inside it, this function logs the outcome, records it and releases the
     lock, so a failed run can never block or crash the next one.
+
+    ``prepare`` is optional and runs first, before the lock is taken. Slow
+    network work belongs there, so other jobs are not kept waiting while we
+    download; whatever it returns is handed to ``work``.
     """
     setup_logging()
+    started = _now()
+    prepared: object = None
+    early_failure: Exception | None = None
+    if prepare is not None:
+        try:
+            prepared = prepare()
+        except Exception as exc:
+            early_failure = exc  # recorded below, once we hold the lock and may write to the database
     try:
         token = acquire_lock(job, wait_seconds)
     except LockTimeout as exc:
@@ -193,9 +207,11 @@ def run_job(job: str, work: Callable[[], str], *, wait_seconds: float = 300) -> 
         return 0
     run_id: int | None = None
     try:
-        run_id = _start_run(job)
+        run_id = _start_run(job, started)
         log.info("%s run #%d started", job, run_id)
-        summary = work()
+        if early_failure is not None:
+            raise early_failure
+        summary = work() if prepare is None else work(prepared)
         _finish_run(run_id, "success", summary=summary)
         log.info("%s run #%d finished: %s", job, run_id, summary)
         return 0

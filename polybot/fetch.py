@@ -20,17 +20,18 @@ MAX_BY_ID_FAILURES = 5  # this many lookups failing in a row means the API is do
 log = logging.getLogger(__name__)
 
 
-def _listing_params(now: str, offset: int) -> dict:
+def _listing_params(now: str, cursor: str | None) -> dict:
     """Query for one page of open markets, highest volume first."""
-    return {
-        "active": "true",
+    params: dict[str, object] = {
         "closed": "false",
         "end_date_min": now,
         "order": "volumeNum",
         "ascending": "false",
         "limit": PAGE_SIZE,
-        "offset": offset,
     }
+    if cursor:
+        params["after_cursor"] = cursor
+    return params
 
 
 def fetch_active_markets(limit: int = 500) -> list[dict]:
@@ -40,29 +41,37 @@ def fetch_active_markets(limit: int = 500) -> list[dict]:
     made of markets the strategies can actually trade; every signal requires
     $200k+ volume and at least several days to resolution.
 
+    Paging uses the keyset endpoint: every response carries a ``next_cursor``
+    that marks where the following page starts. Volumes keep changing while we
+    page, so a market can show up twice; duplicates are dropped by ID.
+
     Each page is retried with backoff (see ``polybot.http``). If a later page
     still fails, the pages already loaded are returned: most of the data is
     better than none. Only a failure on the very first page raises.
     """
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     markets: list[dict] = []
-    offset = 0
+    seen: set[str] = set()
+    cursor: str | None = None
     while len(markets) < limit:
         try:
-            page = http.get_json(f"{GAMMA_BASE}/markets", _listing_params(now, offset))
+            body = http.get_json(f"{GAMMA_BASE}/markets/keyset", _listing_params(now, cursor))
         except FetchError as exc:
             if not markets:
                 raise
-            log.warning(
-                "Keeping the %d markets already loaded; the page at offset %d failed: %s", len(markets), offset, exc
-            )
+            log.warning("Keeping the %d markets already loaded; the next page failed: %s", len(markets), exc)
             break
-        if not isinstance(page, list) or not page:
+        page = body.get("markets") if isinstance(body, dict) else None
+        if not page:
             break
-        markets.extend(page)
-        if len(page) < PAGE_SIZE:
+        for market in page:
+            market_id = str(market.get("id"))
+            if market_id not in seen:
+                seen.add(market_id)
+                markets.append(market)
+        cursor = body.get("next_cursor")
+        if not cursor:
             break
-        offset += PAGE_SIZE
         time.sleep(PAGE_PAUSE)
     return markets[:limit]
 

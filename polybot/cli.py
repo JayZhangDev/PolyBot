@@ -1,4 +1,4 @@
-"""The ``polybot`` command: ``polybot health``, ``polybot pipeline``, ``polybot agent``.
+"""The ``polybot`` command: ``health``, ``discover``, ``markets``, ``pipeline`` and ``agent``.
 
 Also reachable as ``python -m polybot <command>``, which works without
 installing the package.
@@ -13,6 +13,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="polybot", description="PolyBot: Polymarket research, paper trading only.")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("health", help="show the last fetch, rows added in 24 hours and recent errors")
+    sub.add_parser("discover", help="refresh the catalog of open markets now")
+    sub.add_parser("markets", help="show the catalog and which markets the settings select for streaming")
     sub.add_parser("pipeline", help="run one hourly cycle now")
     sub.add_parser("agent", help="run one agent cycle now (extra options are passed through)")
     args, rest = parser.parse_known_args(argv)
@@ -22,6 +24,14 @@ def main(argv: list[str] | None = None) -> int:
         from polybot.health import main as health_main
 
         return health_main()
+    if args.command == "discover":
+        from polybot.discovery import main as discover_main
+
+        return discover_main()
+    if args.command == "markets":
+        from polybot.catalog import main as markets_main
+
+        return markets_main()
     if args.command == "pipeline":
         from polybot.pipeline import main as pipeline_main
 

@@ -93,3 +93,34 @@ def test_run_left_running_by_a_killed_job_is_closed_out():
     run_job("pipeline", lambda: "ok")
     killed, _new = runs()
     assert killed["status"] == "failed" and killed["error"] == jobs.INTERRUPTED
+
+
+# --------------------------- prepare: slow work before the lock ---------------------------
+
+
+def test_prepare_runs_without_the_lock_and_feeds_work():
+    seen = {}
+
+    def prepare() -> list[int]:
+        seen["locked_during_prepare"] = lock_path().exists()
+        return [1, 2, 3]
+
+    def work(items: list[int]) -> str:
+        seen["locked_during_work"] = lock_path().exists()
+        return f"{len(items)} items"
+
+    assert run_job("discover", work, prepare=prepare) == 0
+    assert seen == {"locked_during_prepare": False, "locked_during_work": True}
+    assert runs()[0]["summary"] == "3 items"
+
+
+def test_failure_in_prepare_is_recorded_and_work_is_not_called():
+    called = []
+
+    def prepare() -> None:
+        raise ConnectionError("no network")
+
+    assert run_job("discover", lambda _x: called.append(1) or "ran", prepare=prepare) == 1
+    (run,) = runs()
+    assert called == [] and run["status"] == "failed" and run["error"] == "ConnectionError: no network"
+    assert not lock_path().exists()

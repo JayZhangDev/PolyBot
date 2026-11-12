@@ -8,8 +8,12 @@ from polybot import fetch
 from polybot.http import FetchError
 
 
-def page_of(offset: int, size: int = fetch.PAGE_SIZE) -> list[dict]:
-    return [{"id": str(offset + i)} for i in range(size)]
+def page_of(first_id: int, size: int = fetch.PAGE_SIZE, next_cursor: str | None = None) -> dict:
+    """One keyset response: ``size`` markets, and a cursor if another page follows."""
+    body: dict = {"markets": [{"id": str(first_id + i)} for i in range(size)]}
+    if next_cursor:
+        body["next_cursor"] = next_cursor
+    return body
 
 
 @pytest.fixture(autouse=True)
@@ -17,13 +21,18 @@ def no_pause(monkeypatch):
     monkeypatch.setattr(fetch, "PAGE_PAUSE", 0)
 
 
-def fake_listing(monkeypatch, pages: dict[int, object]) -> list[int]:
-    """Serve ``pages[offset]``; an exception stored there is raised. Returns the offsets requested."""
-    asked: list[int] = []
+def fake_listing(monkeypatch, pages: dict[str | None, object]) -> list[str | None]:
+    """Serve ``pages[cursor]`` (None is the first page); an exception stored there is raised.
+
+    Returns the cursors that were requested, in order.
+    """
+    asked: list[str | None] = []
 
     def get_json(url, params=None, **kwargs):
-        asked.append(params["offset"])
-        result = pages[params["offset"]]
+        assert url.endswith("/markets/keyset") and "offset" not in params
+        cursor = params.get("after_cursor")
+        asked.append(cursor)
+        result = pages[cursor]
         if isinstance(result, Exception):
             raise result
         return result
@@ -33,23 +42,48 @@ def fake_listing(monkeypatch, pages: dict[int, object]) -> list[int]:
 
 
 def test_reads_pages_until_the_limit(monkeypatch):
-    asked = fake_listing(monkeypatch, {0: page_of(0), 100: page_of(100), 200: page_of(200)})
+    asked = fake_listing(
+        monkeypatch,
+        {None: page_of(0, next_cursor="a"), "a": page_of(100, next_cursor="b"), "b": page_of(200, next_cursor="c")},
+    )
     markets = fetch.fetch_active_markets(limit=250)
-    assert len(markets) == 250 and asked == [0, 100, 200]
+    assert len(markets) == 250 and asked == [None, "a", "b"]
 
 
-def test_stops_at_a_short_page(monkeypatch):
-    asked = fake_listing(monkeypatch, {0: page_of(0), 100: page_of(100, size=40)})
-    assert len(fetch.fetch_active_markets(limit=500)) == 140 and asked == [0, 100]
+def test_stops_when_there_is_no_next_cursor(monkeypatch):
+    asked = fake_listing(monkeypatch, {None: page_of(0, next_cursor="a"), "a": page_of(100, size=40)})
+    assert len(fetch.fetch_active_markets(limit=500)) == 140 and asked == [None, "a"]
+
+
+def test_asks_for_open_markets_by_volume(monkeypatch):
+    sent = {}
+
+    def get_json(url, params=None, **kwargs):
+        sent.update(params)
+        return page_of(0, size=1)
+
+    monkeypatch.setattr(fetch.http, "get_json", get_json)
+    fetch.fetch_active_markets(limit=1)
+    assert (sent["closed"], sent["order"], sent["ascending"], sent["limit"]) == ("false", "volumeNum", "false", 100)
+    assert sent["end_date_min"].endswith("Z")
+
+
+def test_market_listed_twice_is_kept_once(monkeypatch):
+    # Volumes change while paging, so a market can slide from one page onto the next.
+    fake_listing(monkeypatch, {None: page_of(0, size=3, next_cursor="a"), "a": page_of(2, size=3)})
+    assert [m["id"] for m in fetch.fetch_active_markets(limit=500)] == ["0", "1", "2", "3", "4"]
 
 
 def test_keeps_loaded_pages_when_a_later_page_fails(monkeypatch):
-    fake_listing(monkeypatch, {0: page_of(0), 100: page_of(100), 200: FetchError("HTTP 500")})
+    fake_listing(
+        monkeypatch,
+        {None: page_of(0, next_cursor="a"), "a": page_of(100, next_cursor="b"), "b": FetchError("HTTP 500")},
+    )
     assert len(fetch.fetch_active_markets(limit=500)) == 200
 
 
 def test_first_page_failing_is_an_error(monkeypatch):
-    fake_listing(monkeypatch, {0: FetchError("HTTP 500")})
+    fake_listing(monkeypatch, {None: FetchError("HTTP 500")})
     with pytest.raises(FetchError):
         fetch.fetch_active_markets(limit=500)
 

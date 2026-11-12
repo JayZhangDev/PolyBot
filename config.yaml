@@ -1,0 +1,20 @@
+# PolyBot settings. Plain choices only: API keys and other secrets never go in this file.
+# Every line is optional; anything left out uses the default shown here.
+# After editing, run `python -m polybot markets` to see what the new settings select.
+
+filters:
+  # A market must have at least this many dollars of resting orders (liquidity)
+  # and this many dollars traded in total (volume) to be listed at all.
+  # These two floors are sent to Polymarket, so smaller markets are never downloaded.
+  # Setting both to 0 lists every open market: tens of thousands, and a much bigger download.
+  min_liquidity: 10000
+  min_volume: 50000
+
+  # Categories: politics, geopolitics, sports, crypto, finance, economics, tech,
+  #             culture, weather, science, mentions, other
+  include_categories: []    # empty means all of them; example: [politics, geopolitics]
+  skip_categories: []       # example: [sports, mentions]
+
+stream:
+  max_markets: 300          # how many markets to stream live
+  rank_by: volume           # which number picks the top ones: volume, volume_24h or liquidity

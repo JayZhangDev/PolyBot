@@ -21,6 +21,7 @@ def temp_db(tmp_path, monkeypatch):
     path = tmp_path / "test.db"
     monkeypatch.setenv("POLYBOT_DB", str(path))
     monkeypatch.setenv("POLYBOT_LOG_DIR", str(tmp_path / "logs"))  # tests never write to the real log
+    monkeypatch.setenv("POLYBOT_CONFIG", str(tmp_path / "config.yaml"))  # absent, so tests get the defaults
     yield path
     # Close any log file a test opened, so the temporary folder can be deleted afterwards.
     root = logging.getLogger()

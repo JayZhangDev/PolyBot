@@ -18,6 +18,7 @@ The core question throughout is **how well prediction-market prices forecast out
 | **v0.2** | Calibration tracker | Measure how well prices predict outcomes (Brier, reliability) |
 | **v2.0** | **Autonomous agent** ([`polybot/agent.py`](polybot/agent.py)) | Every 10 minutes: estimate probability per market, rank by edge, size with half-Kelly under a hard risk cap, log every decision, learn from resolutions |
 | **v2.1** | Hardening: retries, run lock, rotating log, `polybot health` | Ride out API errors, record every run, and show at a glance whether data is still arriving |
+| **v2.2** | Market catalog, tag-based categories, `config.yaml` | Know every open market above the floors, and choose which ones to stream |
 
 The hourly pipeline is unchanged. The agent runs beside it, shares its market, snapshot and resolution tables, and keeps its own positions and bankroll so the two strategies can be compared cleanly. The git history shows each step.
 
@@ -127,7 +128,7 @@ The export also writes `paper_pnl.txt` (git-ignored): the agent's paper P&L, equ
 
 ### Running it on a schedule (Windows + WSL)
 
-Both jobs run as Windows scheduled tasks that call into WSL. One script installs them:
+The three jobs run as Windows scheduled tasks that call into WSL. One script installs them:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
@@ -137,12 +138,13 @@ powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
 |---|---|---|
 | `PolyBot-Hourly` | every hour at five past | [`scripts/run_pipeline.sh`](scripts/run_pipeline.sh): one pipeline cycle |
 | `PolyBot-Agent` | every 10 minutes | [`scripts/run_agent.sh`](scripts/run_agent.sh): one agent cycle, then a dashboard export |
+| `PolyBot-Discover` | every 15 minutes | [`scripts/run_discover.sh`](scripts/run_discover.sh): refresh the market catalog |
 
-**Reloading.** After editing `install_tasks.ps1`, run the same command again; it replaces both tasks. Code changes need no reload, because each run starts a fresh Python process.
+**Reloading.** After editing `install_tasks.ps1`, run the same command again; it replaces all three tasks. Code changes need no reload, because each run starts a fresh Python process.
 
 ```powershell
-Disable-ScheduledTask PolyBot-Hourly, PolyBot-Agent      # pause
-Enable-ScheduledTask  PolyBot-Hourly, PolyBot-Agent      # resume
+Get-ScheduledTask PolyBot-* | Disable-ScheduledTask      # pause
+Get-ScheduledTask PolyBot-* | Enable-ScheduledTask       # resume
 Get-ScheduledTask PolyBot-* | Get-ScheduledTaskInfo      # last run time and result
 ```
 
@@ -179,6 +181,67 @@ The command exits with code 1 when the newest snapshot is more than 30 minutes o
 - **One job at a time.** The pipeline and the agent share one SQLite file, so a lock file (`polybot.db.lock`) makes the second job wait for the first. A lock older than 12 minutes belongs to a run that was killed and is taken over.
 - **Every run is recorded.** The `job_runs` table holds the start, finish, status and error of each run. A run that crashes is recorded as failed and the next one starts normally.
 
+## Market catalog and `config.yaml`
+
+Polymarket has more than 90,000 open markets, and most hold almost no money: on 2026-11-11 only about 1,800 had at least $10,000 of liquidity and $50,000 of volume. Every 15 minutes the discovery job ([`polybot/discovery.py`](polybot/discovery.py)) lists the open markets that pass those two floors and stores one row of metadata for each in the `market_catalog` table: question, category, end date, outcomes, token IDs, volume and liquidity.
+
+- **Floors are applied by Polymarket, not after downloading.** The two numbers are sent with the request, so a refresh is about 20 pages and 15 seconds instead of 900+ pages. Set both to 0 to list everything.
+- **Paging uses cursors.** Each response from `/markets/keyset` carries a `next_cursor` for the following page. The older offset paging is being retired and refuses large offsets; the pipeline and the agent use the cursor endpoint too.
+- **Categories come from Polymarket's tags.** A market carries many tags, so [`CATEGORY_TAGS`](polybot/discovery.py) is checked in order and the first match wins, narrow categories before broad ones (an Iran market tagged both `geopolitics` and `politics` is geopolitics). Anything unmatched is `other`.
+
+[`config.yaml`](config.yaml) holds the choices. Every line is optional, and a misspelled name is reported instead of ignored:
+
+```yaml
+filters:
+  min_liquidity: 10000      # dollars of resting orders
+  min_volume: 50000         # dollars traded over the market's life
+  include_categories: []    # empty means all; example: [politics, geopolitics]
+  skip_categories: []       # example: [sports, mentions]
+
+stream:
+  max_markets: 300          # how many markets to stream live
+  rank_by: volume           # volume, volume_24h or liquidity
+```
+
+```bash
+python -m polybot discover    # refresh the catalog now
+python -m polybot markets     # show the catalog and what the settings select
+```
+
+Example output of `markets` (your numbers will differ):
+
+```
+Catalog  : 1,812 open markets with liquidity >= $10,000 and volume >= $50,000 (refreshed 0 min ago)
+Selected : 300 to stream (max 300, top by volume)
+
+Category      catalog  selected
+  politics        512       175
+  geopolitics     467        63
+  sports          349        16
+  crypto          180        20
+  finance         127         2
+  economics        56        19
+  culture          51         4
+  tech             50         0
+  weather          14         1
+  science           4         0
+  other             2         0
+
+Top 10 selected:
+  $   79,768,842 vol  $   375,574 liq  geopolitics Will the U.S. invade Iran before 2027?
+  $   67,107,370 vol  $   446,567 liq  culture     Will Jesus Christ return before 2027?
+  $   55,187,135 vol  $ 2,178,333 liq  politics    Will LeBron James win the 2028 US Presidential Election?
+  $   54,667,909 vol  $ 2,729,980 liq  politics    Will Oprah Winfrey win the 2028 Democratic presidential nomination?
+  $   52,979,279 vol  $   206,456 liq  politics    Will Bernie Sanders win the 2028 Democratic presidential nomination?
+  $   51,133,396 vol  $   180,827 liq  politics    Will Chelsea Clinton win the 2028 Democratic presidential nomination?
+  $   49,274,155 vol  $ 2,065,622 liq  politics    Will Andrew Yang win the 2028 Democratic presidential nomination?
+  $   46,198,977 vol  $   513,810 liq  geopolitics Will China invade Taiwan by end of 2026?
+  $   45,881,604 vol  $ 1,757,982 liq  politics    Will the US confirm that aliens exist before 2027?
+  $   44,989,642 vol  $ 2,262,800 liq  politics    Will Tim Walz win the 2028 US Presidential Election?
+```
+
+A market can be selected only if it is accepting orders and has exactly two outcome tokens. The streamer that uses this selection is the next step on the roadmap.
+
 ## Strategies (v1 pipeline)
 
 | Strategy | Rule | Rationale |
@@ -209,6 +272,8 @@ python -m polybot.signals             # print current signals and watchlist
 python -m polybot.portfolio           # print bankroll summary
 python -m polybot.resolutions         # one resolution sweep (--backfill for all)
 python -m polybot health              # last fetch, rows added in 24 hours, recent errors
+python -m polybot discover            # refresh the market catalog
+python -m polybot markets             # what config.yaml selects for streaming
 ```
 
 **Upgrading an existing database?** Run `python -m polybot.resolutions --backfill` once. It checks every market that has already ended, rather than 50 per hour.
@@ -256,6 +321,9 @@ polybot/
   db.py            database location and connections
   http.py          GET with retries and exponential backoff
   fetch.py         Gamma API client (active markets, markets by ID)
+  config.py        settings from config.yaml, with defaults and clear errors
+  discovery.py     list every open market above the floors; tags to categories
+  catalog.py       market_catalog table and the choice of markets to stream
   storage.py       schema, migrations, snapshot persistence
   pricing.py       executable entry prices from bid/ask
   resolutions.py   resolution sweep: how each market ended
@@ -271,6 +339,7 @@ polybot/
   health.py        the `polybot health` report
   cli.py           the `polybot` command
   app.py           Streamlit dashboard
+config.yaml        filters and limits (no secrets)
 scripts/           dashboard export, job runners, scheduler installer, health check
 tests/             pytest suite (temporary database, no network)
 tests/fixtures/    real Gamma API responses saved for the parser tests
@@ -279,9 +348,10 @@ tests/fixtures/    real Gamma API responses saved for the parser tests
 ## Testing
 
 ```bash
-pytest          # 162 tests: pricing, storage, signals, settlement, resolutions, calibration,
+pytest          # 219 tests: pricing, storage, signals, settlement, resolutions, calibration,
                 # the agent (Kelly sizing, estimator, risk rules, settlement, learning),
-                # retries, the job lock, health, and parsers against saved API responses
+                # retries, the job lock, health, settings, discovery and the catalog,
+                # and parsers against saved API responses
 ruff check .
 ```
 
@@ -295,6 +365,7 @@ CI runs both on every push and pull request, on Python 3.10 and 3.12.
 - [x] **v0.2** Calibration tracker: resolution sweep, Brier and skill scores, reliability curve, longshot check
 - [x] **v2.0** Autonomous agent: probability ensemble, 8% edge filter, half-Kelly with 6% cap, decision audit log, learning loop, Agent tab
 - [x] **v2.1** Hardening: retries with backoff, job lock, run records, rotating log, `polybot health`
+- [x] **v2.2** Market catalog: cursor paging, tag-based categories, `config.yaml` filters, stream selection
 - [ ] **v0.3** Strategy scorecard: P&L, max drawdown and Brier score per strategy, compared with the market baseline
 - [ ] **v0.4** Full-event fetching and a basket executor for neg-risk mispricings
 
@@ -305,7 +376,7 @@ CI runs both on every push and pull request, on Python 3.10 and 3.12.
 - **Sample size.** Calibration needs hundreds of resolved markets per horizon before buckets are meaningful; early numbers are noisy.
 - **Hourly resolution (v1).** Moves inside the hour are invisible to the pipeline, and its momentum signal compares snapshots about 20 to 24 hours apart.
 - **Agent evidence.** The agent's recency signal needs 24 hours of its own 10-minute snapshots before it contributes, and its calibration priors need many resolved markets before they move from the documented defaults.
-- **Coverage.** The pipeline snapshots the 500 highest-volume open markets each hour, plus any market currently held. The agent scans up to 2,000.
+- **Coverage.** The pipeline snapshots the 500 highest-volume open markets each hour, plus any market currently held. The agent scans up to 2,000. The catalog knows every open market above the floors in `config.yaml`, but it stores metadata only; prices are still recorded by the pipeline and the agent.
 
 ## Disclaimer
 
