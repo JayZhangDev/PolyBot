@@ -16,8 +16,9 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import datetime, timezone
 
-from polybot import http
+from polybot import http, rawstore
 from polybot.catalog import MarketMeta, save_catalog, select_stream_markets
 from polybot.config import Settings, load_settings
 from polybot.fetch import GAMMA_BASE
@@ -146,6 +147,26 @@ def fetch_open_markets(settings: Settings) -> list[MarketMeta]:
     return metas
 
 
+def write_selection(selected: list[MarketMeta]) -> None:
+    """Publish the chosen markets in a small file for the streamer.
+
+    The streamer reads this file instead of the database, so it never has to
+    wait for (or collide with) a job that is writing there.
+    """
+    markets = [
+        {
+            "market_id": m.market_id,
+            "question": m.question,
+            "category": m.category,
+            "yes_token": m.token_ids[0],
+            "no_token": m.token_ids[1],
+        }
+        for m in selected
+    ]
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rawstore.write_json_atomic(rawstore.selection_path(), {"updated_at": stamp, "markets": markets})
+
+
 def _download() -> tuple[Settings, list[MarketMeta]]:
     """The slow part, done before the database lock is taken."""
     settings = load_settings()
@@ -157,6 +178,7 @@ def _store(downloaded: tuple[Settings, list[MarketMeta]]) -> str:
     settings, metas = downloaded
     counts = save_catalog(metas)
     selected = select_stream_markets(settings)
+    write_selection(selected)
     return (
         f"listed {counts['listed']} open markets ({counts['new']} new), "
         f"{len(selected)} selected for streaming (max {settings.max_stream_markets})"

@@ -1,10 +1,11 @@
-# Registers PolyBot's three Windows scheduled tasks. All run inside WSL.
+# Registers PolyBot's four Windows scheduled tasks. All run inside WSL.
 #
 #   PolyBot-Hourly     the pipeline, once an hour at five past
 #   PolyBot-Agent      the paper-trading agent, every 10 minutes
 #   PolyBot-Discover   the market catalog refresh, every 15 minutes
+#   PolyBot-Stream     the live websocket recorder, which runs all the time
 #
-# Install, or reload after changing this file (safe to run again; it replaces all three):
+# Install, or reload after changing this file (safe to run again; it replaces all four):
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
 #
@@ -68,3 +69,8 @@ Register-PolyBotTask -Name "PolyBot-Agent" -Script "run_agent.sh" -EveryMinutes 
 # happens before it takes the database lock, so it only holds the others up for a few seconds.
 Register-PolyBotTask -Name "PolyBot-Discover" -Script "run_discover.sh" -EveryMinutes 15 -StartMinute 7 `
     -LimitMinutes 14 -Wake $false -Description "PolyBot market catalog refresh, every 15 minutes (WSL)"
+# The streamer never finishes, so it has no time limit (0 means unlimited). Its trigger fires at login
+# and then every 5 minutes: while the streamer is running the extra starts are ignored, and if it has
+# died one of them brings it back. That makes the trigger a watchdog as well as a starter.
+Register-PolyBotTask -Name "PolyBot-Stream" -Script "run_stream.sh" -EveryMinutes 5 -StartMinute 1 `
+    -LimitMinutes 0 -Wake $false -Description "PolyBot live order book and trade recorder (WSL websocket)"

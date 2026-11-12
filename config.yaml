@@ -18,3 +18,4 @@ filters:
 stream:
   max_markets: 300          # how many markets to stream live
   rank_by: volume           # which number picks the top ones: volume, volume_24h or liquidity
+  flush_seconds: 2          # how often the streamer writes what it has collected to disk

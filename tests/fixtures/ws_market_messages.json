@@ -1,0 +1,87 @@
+{
+ "book": {
+  "market": "0xc771628162ee0100dc74e1c71c14ed067c3cc0f90e85e9f2c1038a33967c52a5",
+  "asset_id": "100405605635057175830292429276520208790943702328776842569003871296192726958839",
+  "timestamp": "1794451123376",
+  "hash": "93f8f48b5a07c8726031a45f1b4442188445f992",
+  "bids": [
+   {
+    "price": "0.993",
+    "size": "5113.97"
+   },
+   {
+    "price": "0.994",
+    "size": "5113.97"
+   },
+   {
+    "price": "0.995",
+    "size": "7408.13"
+   },
+   {
+    "price": "0.996",
+    "size": "14851.54"
+   },
+   {
+    "price": "0.997",
+    "size": "7694.29"
+   },
+   {
+    "price": "0.998",
+    "size": "19409.48"
+   }
+  ],
+  "asks": [
+   {
+    "price": "0.999",
+    "size": "14192.25"
+   }
+  ],
+  "tick_size": "0.001",
+  "event_type": "book",
+  "last_trade_price": "0.001"
+ },
+ "price_change": {
+  "market": "0x377e7fe65cf198a7fc4fdae3f2136b74729279267858daaf96718b23bc2a5607",
+  "price_changes": [
+   {
+    "asset_id": "18652479948917565296149340091675894865339012333173025944893512396354173886674",
+    "price": "0.05",
+    "size": "37708.54",
+    "side": "BUY",
+    "hash": "fa0dc54e922475d2e0e4303e4377a4b402b3c49e",
+    "best_bid": "0.06",
+    "best_ask": "0.07"
+   },
+   {
+    "asset_id": "60499458684380641857666641513383149627633695110197406276308452075860198022694",
+    "price": "0.95",
+    "size": "37708.54",
+    "side": "SELL",
+    "hash": "926b1ba7ab266a098f32667c0841143c09a596d0",
+    "best_bid": "0.93",
+    "best_ask": "0.94"
+   }
+  ],
+  "timestamp": "1794451136407",
+  "event_type": "price_change"
+ },
+ "last_trade_price": {
+  "market": "0xefa17dee3af09f69f9ddf245b969aa4efbe7c71cdf06ee49d694408bc33e2ed2",
+  "asset_id": "33339798372916037220786136133406478491116150628220441951753426683441228279665",
+  "price": "0.002",
+  "size": "5",
+  "fee_rate_bps": "0",
+  "side": "BUY",
+  "timestamp": "1794451136943",
+  "event_type": "last_trade_price",
+  "transaction_hash": "0x2c7f088984f2b00dbe9f47a72fe9a5e0c025d7f33a829453c403cc35353abee5"
+ },
+ "tick_size_change": {
+  "market": "0x60022c5a948ad070b3c95018820c30e924698de9e38ca2c9e9c72ce1803f7ecc",
+  "asset_id": "29353926278244585040638565375620765842969064323176420591789200664848661976632",
+  "old_tick_size": "0.01",
+  "new_tick_size": "0.001",
+  "timestamp": "1794451188512",
+  "event_type": "tick_size_change"
+ }
+}

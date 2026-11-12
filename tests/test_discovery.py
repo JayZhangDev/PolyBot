@@ -191,3 +191,15 @@ def test_job_records_a_failed_download(monkeypatch):
     assert discovery.main() == 1
     (run,) = job_runs()
     assert run["status"] == "failed" and "HTTP 500" in run["error"]
+
+
+def test_job_publishes_the_selection_for_the_streamer(monkeypatch):
+    from polybot import rawstore
+    from polybot.streamer import load_selection
+
+    serve(monkeypatch, [{"markets": [raw("1"), raw("2", acceptingOrders=False), raw("3", volumeNum=9e6)]}])
+    assert discovery.main() == 0
+    selection = load_selection()
+    assert [m.market_id for m in selection] == ["3", "1"]  # highest volume first; "2" cannot be streamed
+    assert (selection[0].yes_token, selection[0].no_token, selection[0].category) == ("31", "32", "politics")
+    assert rawstore.read_json(rawstore.selection_path())["updated_at"]

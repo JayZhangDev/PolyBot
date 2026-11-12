@@ -61,3 +61,52 @@ def test_command_line_entry_point(capsys):
     assert cli.main(["health"]) == 0
     out = capsys.readouterr().out
     assert "Last successful fetch" in out and "Rows added, last 24h" in out
+
+
+# --------------------------- live stream section ---------------------------
+
+
+def stream_status(age_seconds: float, **changes) -> None:
+    from polybot import rawstore
+
+    stamp = (datetime.now(timezone.utc) - timedelta(seconds=age_seconds)).isoformat(timespec="seconds")
+    status = {
+        "updated_at": stamp,
+        "state": "connected",
+        "markets_streamed": 300,
+        "tokens_subscribed": 600,
+        "last_message_at": stamp,
+        "trades_today": 1234,
+        "book_rows_today": 5678,
+        "reconnects_today": 2,
+        "last_disconnect": {"at": stamp, "after_seconds": 900, "reason": "DeadConnection: nothing received"},
+    }
+    rawstore.write_json_atomic(rawstore.status_path(), {**status, **changes})
+
+
+def test_stream_section_before_the_streamer_has_ever_run():
+    assert health.collect()["stream"] is None
+    assert "Live stream: never started" in health.format_report(health.collect())
+
+
+def test_stream_section_while_running():
+    from polybot import rawstore
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    rawstore.append_rows("trades", ("ts", "x"), [(f"{today}T00:00:01.000Z", "y" * 2_000_000)])
+    stream_status(age_seconds=4)
+    report = health.collect()
+    text = health.format_report(report)
+    assert report["stream"]["running"] is True
+    assert "State          : connected, status written" in text and "Markets        : 300 (600 tokens)" in text
+    assert "1,234 trades, 5,678 book rows, 2 reconnects" in text
+    assert "Raw data today : 2.0 MB (book_top 0.0 MB, trades 2.0 MB)" in text
+    assert "after 900s: DeadConnection: nothing received" in text
+
+
+def test_stream_section_when_the_status_is_stale_or_stopped():
+    stream_status(age_seconds=600)
+    assert health.collect()["stream"]["running"] is False
+    assert "NOT RUNNING" in health.format_report(health.collect())
+    stream_status(age_seconds=2, state="stopped")
+    assert health.collect()["stream"]["running"] is False

@@ -15,6 +15,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
+from polybot import rawstore
 from polybot.db import connect, db_path
 from polybot.jobs import init_job_tables
 from polybot.logsetup import log_file
@@ -24,6 +25,7 @@ from polybot.timeutil import parse_ts
 STALE_AFTER_MINUTES = 30  # the agent writes every 10 minutes, so half an hour of silence is a problem
 WINDOW_HOURS = 24
 MAX_ERRORS_SHOWN = 5
+STREAM_FRESH_SECONDS = 45  # the streamer rewrites its status every 10 seconds
 
 
 def _job_stats(c: sqlite3.Connection, cutoff: str) -> dict[str, dict]:
@@ -100,7 +102,34 @@ def collect(now: datetime | None = None) -> dict:
     report["healthy"] = (
         report["minutes_since_fetch"] is not None and report["minutes_since_fetch"] <= STALE_AFTER_MINUTES
     )
+    report["stream"] = stream_report(now)
     return report
+
+
+def _seconds_since(stamp: object, now: datetime) -> float | None:
+    moment = parse_ts(stamp) if isinstance(stamp, str) else None
+    return None if moment is None else (now - moment).total_seconds()
+
+
+def stream_report(now: datetime) -> dict | None:
+    """What the live streamer last said about itself, or None if it has never run.
+
+    The streamer rewrites its status file every 10 seconds. If that file is
+    older than ``STREAM_FRESH_SECONDS`` the streamer is not running, whatever
+    the file claims.
+    """
+    status = rawstore.read_json(rawstore.status_path())
+    if status is None:
+        return None
+    age = _seconds_since(status.get("updated_at"), now)
+    running = age is not None and age < STREAM_FRESH_SECONDS and status.get("state") != "stopped"
+    return {
+        **status,
+        "status_age_seconds": age,
+        "running": running,
+        "seconds_since_message": _seconds_since(status.get("last_message_at"), now),
+        "bytes_today": rawstore.day_bytes(now.date().isoformat()),
+    }
 
 
 def _when(ts: datetime | str | None) -> str:
@@ -135,8 +164,48 @@ def format_report(r: dict) -> str:
     for e in r["errors"]:
         lines.append(f"  {_when(e['started_at'])}  {e['job']:<9} {(e['error'] or 'no message')[:110]}")
 
-    lines += ["", f"Database : {db_path()}", f"Log file : {log_file()}"]
+    lines += ["", *_stream_lines(r.get("stream"))]
+    lines += [
+        "",
+        f"Database   : {db_path()}",
+        f"Log file   : {log_file()}",
+        f"Stream log : {log_file('stream.log')}",
+        f"Live data  : {rawstore.data_dir() / 'raw'}",
+    ]
     return "\n".join(lines)
+
+
+def _megabytes(size: int) -> str:
+    return f"{size / 1_000_000:.1f} MB"
+
+
+def _stream_lines(s: dict | None) -> list[str]:
+    """The "Live stream" block of the report."""
+    if s is None:
+        return ["Live stream: never started"]
+    if s["running"]:
+        state = f"{s['state']}, status written {s['status_age_seconds']:.0f}s ago"
+    else:
+        state = f"NOT RUNNING (last status {_when(s.get('updated_at'))}, state '{s.get('state')}')"
+    quiet = s["seconds_since_message"]
+    sizes = s["bytes_today"]
+    lines = [
+        "Live stream:",
+        f"  State          : {state}",
+        f"  Markets        : {s.get('markets_streamed', 0)} ({s.get('tokens_subscribed', 0)} tokens)",
+        f"  Last message   : {'never' if quiet is None else f'{quiet:.0f}s ago'}",
+        f"  Today (UTC)    : {s.get('trades_today', 0):,} trades, {s.get('book_rows_today', 0):,} book rows, "
+        f"{s.get('reconnects_today', 0)} reconnects",
+        f"  Raw data today : {_megabytes(sum(sizes.values()))} "
+        f"(book_top {_megabytes(sizes['book_top'])}, trades {_megabytes(sizes['trades'])})",
+    ]
+    last = s.get("last_disconnect")
+    if last:
+        lines.append(
+            f"  Last disconnect: {_when(last.get('at'))} after {last.get('after_seconds')}s: "
+            f"{str(last.get('reason'))[:90]}"
+        )
+    return lines
 
 
 def main() -> int:

@@ -49,6 +49,7 @@ class Settings:
     skip_categories: tuple[str, ...] = ()
     max_stream_markets: int = 300  # how many markets to stream live
     rank_by: str = "volume"  # which number decides "top" when cutting to the maximum
+    flush_seconds: float = 2.0  # how often the streamer writes what it has collected
 
 
 # Where each setting lives in the YAML file: section -> {yaml name: Settings field}.
@@ -59,7 +60,7 @@ _LAYOUT = {
         "include_categories": "include_categories",
         "skip_categories": "skip_categories",
     },
-    "stream": {"max_markets": "max_stream_markets", "rank_by": "rank_by"},
+    "stream": {"max_markets": "max_stream_markets", "rank_by": "rank_by", "flush_seconds": "flush_seconds"},
 }
 
 
@@ -96,6 +97,10 @@ def _convert(field: str, name: str, value: object) -> object:
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise ConfigError(f"{name} must be a whole number of 1 or more, got {value!r}")
         return value
+    if field == "flush_seconds":
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.5 <= value <= 60:
+            raise ConfigError(f"{name} must be a number of seconds between 0.5 and 60, got {value!r}")
+        return float(value)
     if value not in RANKINGS:
         raise ConfigError(f"{name} must be one of {', '.join(RANKINGS)}, got {value!r}")
     return value

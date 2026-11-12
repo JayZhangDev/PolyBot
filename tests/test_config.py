@@ -43,12 +43,13 @@ filters:
 stream:
   max_markets: 50
   rank_by: volume_24h
+  flush_seconds: 5
 """,
         )
     )
     assert settings.min_liquidity == 2500.0 and settings.min_volume == 0.0
     assert settings.include_categories == ("politics", "crypto")  # names are not case-sensitive
-    assert settings.max_stream_markets == 50 and settings.rank_by == "volume_24h"
+    assert settings.max_stream_markets == 50 and settings.rank_by == "volume_24h" and settings.flush_seconds == 5.0
     assert settings.skip_categories == ()  # left out, so the default applies
 
 
@@ -65,6 +66,8 @@ stream:
         ("stream:\n  max_markets: 0\n", "stream.max_markets must be a whole number"),
         ("stream:\n  max_markets: 2.5\n", "stream.max_markets must be a whole number"),
         ("stream:\n  rank_by: vibes\n", "stream.rank_by must be one of"),
+        ("stream:\n  flush_seconds: 0\n", "stream.flush_seconds must be a number of seconds between 0.5 and 60"),
+        ("stream:\n  flush_seconds: fast\n", "stream.flush_seconds must be a number of seconds"),
         ("stream: 300\n", "section 'stream' must contain settings"),
         ("- just\n- a list\n", "must be a set of sections"),
         ("filters: [unclosed\n", "is not valid YAML"),

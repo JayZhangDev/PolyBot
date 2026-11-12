@@ -19,6 +19,7 @@ The core question throughout is **how well prediction-market prices forecast out
 | **v2.0** | **Autonomous agent** ([`polybot/agent.py`](polybot/agent.py)) | Every 10 minutes: estimate probability per market, rank by edge, size with half-Kelly under a hard risk cap, log every decision, learn from resolutions |
 | **v2.1** | Hardening: retries, run lock, rotating log, `polybot health` | Ride out API errors, record every run, and show at a glance whether data is still arriving |
 | **v2.2** | Market catalog, tag-based categories, `config.yaml` | Know every open market above the floors, and choose which ones to stream |
+| **v2.3** | Live websocket recorder ([`polybot/streamer.py`](polybot/streamer.py)) | Record order books and every trade for the selected markets as they happen |
 
 The hourly pipeline is unchanged. The agent runs beside it, shares its market, snapshot and resolution tables, and keeps its own positions and bankroll so the two strategies can be compared cleanly. The git history shows each step.
 
@@ -128,7 +129,7 @@ The export also writes `paper_pnl.txt` (git-ignored): the agent's paper P&L, equ
 
 ### Running it on a schedule (Windows + WSL)
 
-The three jobs run as Windows scheduled tasks that call into WSL. One script installs them:
+The four jobs run as Windows scheduled tasks that call into WSL. One script installs them:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
@@ -139,8 +140,9 @@ powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
 | `PolyBot-Hourly` | every hour at five past | [`scripts/run_pipeline.sh`](scripts/run_pipeline.sh): one pipeline cycle |
 | `PolyBot-Agent` | every 10 minutes | [`scripts/run_agent.sh`](scripts/run_agent.sh): one agent cycle, then a dashboard export |
 | `PolyBot-Discover` | every 15 minutes | [`scripts/run_discover.sh`](scripts/run_discover.sh): refresh the market catalog |
+| `PolyBot-Stream` | all the time | [`scripts/run_stream.sh`](scripts/run_stream.sh): the live recorder. Its trigger fires at login and every 5 minutes; extra starts are ignored while it runs, so the trigger also restarts it if it dies |
 
-**Reloading.** After editing `install_tasks.ps1`, run the same command again; it replaces all three tasks. Code changes need no reload, because each run starts a fresh Python process.
+**Reloading.** After editing `install_tasks.ps1`, run the same command again; it replaces all four tasks. Code changes need no reload, because each run starts a fresh Python process.
 
 ```powershell
 Get-ScheduledTask PolyBot-* | Disable-ScheduledTask      # pause
@@ -176,7 +178,7 @@ Errors in the last 24h:
 
 The command exits with code 1 when the newest snapshot is more than 30 minutes old.
 
-- **Log.** Every run writes timestamped lines to `logs/polybot.log`. The file rotates at about 2 MB and five old files are kept. `logs/task_output.log` only receives output from a run that crashed before logging started.
+- **Log.** The streamer logs to `logs/stream.log` (connections, every disconnect with its reason, selection changes, a summary every five minutes). Every run of the other jobs writes timestamped lines to `logs/polybot.log`. The file rotates at about 2 MB and five old files are kept. `logs/task_output.log` only receives output from a run that crashed before logging started.
 - **Retries.** A request that fails with a network error or a 5xx status is retried up to four times, waiting 1s, 2s, 4s then 8s ([`polybot/http.py`](polybot/http.py)). If a later page of the market listing still fails, the pages already loaded are kept.
 - **One job at a time.** The pipeline and the agent share one SQLite file, so a lock file (`polybot.db.lock`) makes the second job wait for the first. A lock older than 12 minutes belongs to a run that was killed and is taken over.
 - **Every run is recorded.** The `job_runs` table holds the start, finish, status and error of each run. A run that crashes is recorded as failed and the next one starts normally.
@@ -240,7 +242,54 @@ Top 10 selected:
   $   44,989,642 vol  $ 2,262,800 liq  politics    Will Tim Walz win the 2028 US Presidential Election?
 ```
 
-A market can be selected only if it is accepting orders and has exactly two outcome tokens. The streamer that uses this selection is the next step on the roadmap.
+A market can be selected only if it is accepting orders and has exactly two outcome tokens. Each refresh also writes the selection to `data/stream_selection.json`, which is what the streamer reads.
+
+## Live data from the websocket
+
+A websocket is a connection that stays open so the server can push each change the moment it happens. The streamer ([`polybot/streamer.py`](polybot/streamer.py)) keeps one open to Polymarket's public market feed (`wss://ws-subscriptions-clob.polymarket.com/ws/market`), subscribes to both tokens of every selected market, and appends what arrives to one CSV file per table per UTC day. It only listens; it has no way to place an order.
+
+```
+data/raw/book_top/2026-11-12.csv    the top of each order book over time
+data/raw/trades/2026-11-12.csv      every trade
+```
+
+| Table | One row is | Columns |
+|---|---|---|
+| `book_top` | a market's order book at a moment when its best five levels changed | `ts`, `market_id`, `best_bid`, `best_ask`, `spread`, `bid_depth`, `ask_depth`, then price and size for five bid levels and five ask levels |
+| `trades` | one trade | `ts`, `market_id`, `outcome` (0 = first token, 1 = second), `price`, `size`, `side` (the taker's), `fee_rate_bps`, `tx_hash` |
+
+Sample rows:
+
+```
+ts,market_id,best_bid,best_ask,spread,bid_depth,ask_depth,bid_px_1,bid_sz_1,...
+2026-11-12T02:45:22.853Z,559675,0.003,0.004,0.001,933262.98,15101.06,0.003,2525.28,...
+
+ts,market_id,outcome,price,size,side,fee_rate_bps,tx_hash
+2026-11-12T02:45:26.114Z,1105742,1,0.94,3.191483,BUY,0,0x368b...
+```
+
+**What is kept, and why.** The feed sends about a hundred order book changes a second for 300 markets. Three choices keep the files small without losing what matters:
+
+- **Only the first token's book is recorded.** The two tokens of a market are exact mirrors (a bid for YES at 0.30 is an ask for NO at 0.70; measured on 293 of 293 markets), so the second book would store everything twice. Trades are recorded for both tokens.
+- **Every change is applied, but a row is written only when the best five levels differ** from the last row for that market. A change deep in the book adds nothing.
+- **Writes happen in batches** every `flush_seconds` (2 by default), never one row at a time.
+
+**Staying connected.**
+
+- **Heartbeat.** The streamer sends `PING` every 10 seconds and the server answers `PONG`. If nothing at all arrives for 30 seconds, the connection is treated as dead even though it still looks open.
+- **Reconnect with backoff.** After a drop it waits 1s, 2s, 4s and so on up to a minute, then resets once a connection has lasted a minute.
+- **Resubscribe.** A new connection gets the full token list again, and fresh book snapshots replace the old books.
+- **Selection changes** are picked up within 30 seconds by subscribing and unsubscribing on the open connection.
+- **Every disconnect is logged** with how long the connection lasted and why.
+- **Backup.** The hourly pipeline and the agent keep taking their own snapshots over HTTP, so there is still price history if the streamer is down.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\stream.ps1 status
+powershell -ExecutionPolicy Bypass -File scripts\stream.ps1 stop      # writes the last batch, disables the task
+powershell -ExecutionPolicy Bypass -File scripts\stream.ps1 start
+```
+
+`python -m polybot stream` runs it by hand; a second copy notices the first and exits. `polybot health` shows a "Live stream" block: state, markets, seconds since the last message, today's trades, book rows and reconnects, and the size of today's files.
 
 ## Strategies (v1 pipeline)
 
@@ -274,6 +323,7 @@ python -m polybot.resolutions         # one resolution sweep (--backfill for all
 python -m polybot health              # last fetch, rows added in 24 hours, recent errors
 python -m polybot discover            # refresh the market catalog
 python -m polybot markets             # what config.yaml selects for streaming
+python -m polybot stream              # record live order books and trades until stopped
 ```
 
 **Upgrading an existing database?** Run `python -m polybot.resolutions --backfill` once. It checks every market that has already ended, rather than 50 per hour.
@@ -324,6 +374,10 @@ polybot/
   config.py        settings from config.yaml, with defaults and clear errors
   discovery.py     list every open market above the floors; tags to categories
   catalog.py       market_catalog table and the choice of markets to stream
+  book.py          an order book kept current from snapshots and level changes
+  recorder.py      websocket messages in, book_top and trade rows out
+  rawstore.py      one CSV per table per day under data/raw, plus status files
+  streamer.py      the websocket connection: heartbeat, reconnects, batched writes
   storage.py       schema, migrations, snapshot persistence
   pricing.py       executable entry prices from bid/ask
   resolutions.py   resolution sweep: how each market ended
@@ -340,6 +394,7 @@ polybot/
   cli.py           the `polybot` command
   app.py           Streamlit dashboard
 config.yaml        filters and limits (no secrets)
+data/              live data and stream status (not in git)
 scripts/           dashboard export, job runners, scheduler installer, health check
 tests/             pytest suite (temporary database, no network)
 tests/fixtures/    real Gamma API responses saved for the parser tests
@@ -348,10 +403,11 @@ tests/fixtures/    real Gamma API responses saved for the parser tests
 ## Testing
 
 ```bash
-pytest          # 219 tests: pricing, storage, signals, settlement, resolutions, calibration,
+pytest          # 274 tests: pricing, storage, signals, settlement, resolutions, calibration,
                 # the agent (Kelly sizing, estimator, risk rules, settlement, learning),
                 # retries, the job lock, health, settings, discovery and the catalog,
-                # and parsers against saved API responses
+                # the order book, recorder and streamer (fake socket and clock),
+                # and parsers against saved API and websocket messages
 ruff check .
 ```
 
@@ -366,6 +422,7 @@ CI runs both on every push and pull request, on Python 3.10 and 3.12.
 - [x] **v2.0** Autonomous agent: probability ensemble, 8% edge filter, half-Kelly with 6% cap, decision audit log, learning loop, Agent tab
 - [x] **v2.1** Hardening: retries with backoff, job lock, run records, rotating log, `polybot health`
 - [x] **v2.2** Market catalog: cursor paging, tag-based categories, `config.yaml` filters, stream selection
+- [x] **v2.3** Live websocket recorder: order book tops and trades in daily files, heartbeat, reconnects
 - [ ] **v0.3** Strategy scorecard: P&L, max drawdown and Brier score per strategy, compared with the market baseline
 - [ ] **v0.4** Full-event fetching and a basket executor for neg-risk mispricings
 
@@ -375,6 +432,7 @@ CI runs both on every push and pull request, on Python 3.10 and 3.12.
 - **Fees are not modelled.** Taker fees would reduce P&L further.
 - **Sample size.** Calibration needs hundreds of resolved markets per horizon before buckets are meaningful; early numbers are noisy.
 - **Hourly resolution (v1).** Moves inside the hour are invisible to the pipeline, and its momentum signal compares snapshots about 20 to 24 hours apart.
+- **Live data is recorded, not yet used.** The strategies still trade on the 10-minute and hourly snapshots. The websocket files are raw CSV; packing them into a compact format and building minute bars comes next.
 - **Agent evidence.** The agent's recency signal needs 24 hours of its own 10-minute snapshots before it contributes, and its calibration priors need many resolved markets before they move from the documented defaults.
 - **Coverage.** The pipeline snapshots the 500 highest-volume open markets each hour, plus any market currently held. The agent scans up to 2,000. The catalog knows every open market above the floors in `config.yaml`, but it stores metadata only; prices are still recorded by the pipeline and the agent.
 
