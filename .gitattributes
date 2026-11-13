@@ -1,1 +1,4 @@
 *.sh text eol=lf
+# Docker reads these on Linux; a Windows line ending would break a multi-line RUN command.
+Dockerfile text eol=lf
+.dockerignore text eol=lf

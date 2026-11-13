@@ -7,6 +7,9 @@
 #   PolyBot-Rollup     the daily rollup: pack finished days, copy snapshots, build bars
 #   PolyBot-Paper      the PAPER trading cycle and the status file, every 5 minutes
 #
+# Docker and the Mac run the same timetable from one process instead (polybot/scheduler.py,
+# `polybot run`). If you change a time here, change it there too; tests/test_scheduler.py checks.
+#
 # Install, or reload after changing this file (safe to run again; it replaces all six):
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1

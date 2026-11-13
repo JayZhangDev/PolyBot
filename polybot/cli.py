@@ -1,4 +1,4 @@
-"""The ``polybot`` command: ``health``, ``discover``, ``markets``, ``stream``, ``pipeline`` and ``agent``.
+"""The ``polybot`` command: ``health``, ``run``, ``stream``, ``paper``, ``account`` and the other jobs.
 
 Also reachable as ``python -m polybot <command>``, which works without
 installing the package.
@@ -24,6 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("account", help="show the PAPER account: equity, PnL, positions, win rate, drawdown")
     sub.add_parser("pipeline", help="run one hourly cycle now")
     sub.add_parser("agent", help="run one agent cycle now (extra options are passed through)")
+    sub.add_parser("run", help="run every job on its timetable from one process (Docker, a server or a Mac)")
     args, rest = parser.parse_known_args(argv)
 
     # Imported here so `polybot health` stays quick and does not load the trading code.
@@ -66,6 +67,10 @@ def main(argv: list[str] | None = None) -> int:
         from polybot.pipeline import main as pipeline_main
 
         return pipeline_main()
+    if args.command == "run":
+        from polybot.scheduler import main as run_main
+
+        return run_main(rest)
     from polybot.agent import main as agent_main
 
     return agent_main(rest)

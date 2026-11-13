@@ -19,3 +19,12 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check .
       - run: pytest -q
+
+  # The always-on image (docs/always-on.md): build it, then check it starts and knows its timetable.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t polybot .
+      - run: docker run --rm polybot polybot run --plan
+      - run: docker run --rm polybot python -c "import polybot.streamer, polybot.paper, polybot.rollup, polybot.agent"

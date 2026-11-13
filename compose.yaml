@@ -1,0 +1,29 @@
+# PolyBot on an always-on machine. From this folder:
+#
+#   docker compose up -d --build                     start (and rebuild after `git pull`)
+#   docker compose exec polybot polybot health       is it collecting data?
+#   docker compose exec polybot polybot account      the PAPER account
+#   docker compose logs -f --tail 50                 watch the jobs
+#   docker compose stop                              stop; `docker compose start` resumes
+#
+# The full guide is docs/always-on.md. Paper trading only, and no keys are needed.
+services:
+  polybot:
+    build: .
+    image: polybot
+    restart: unless-stopped # start again after a crash or a server reboot, until you stop it yourself
+    init: true # a tiny helper process that passes stop signals on and tidies up finished jobs
+    stop_grace_period: 45s # time for the streamer to write its last batch before Docker gives up waiting
+    environment:
+      TZ: ${TZ:-UTC} # clock times in the status file; for example TZ=America/New_York in a .env file
+    volumes:
+      - polybot-data:/app/data # databases, recorded data, logs and reports
+      - ./config.yaml:/app/config.yaml:ro # edit config.yaml here; each job reads it when it next starts
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m" # keep at most three 10 MB files of container output
+        max-file: "3"
+
+volumes:
+  polybot-data:

@@ -23,6 +23,7 @@ The core question throughout is **how well prediction-market prices forecast out
 | **v2.4** | Warehouse: Parquet files queried with DuckDB, daily rollup | Keep months of live data small, and answer questions over all of it in well under a second |
 | **v2.5** | Calibration tracker, `models/` folder, report with charts | Score the market's prices by horizon and category, and score any model against the market |
 | **v2.6** | PAPER ledger: fills at the recorded bid and ask, depth, fees, status file | Trade a model's opinions with fake money as honestly as the recorded books allow |
+| **v2.7** | Always-on option: one-process scheduler, Dockerfile, Mac launchd file, guide | Keep collecting data on a $5 cloud server while your own computer sleeps |
 
 The hourly pipeline is unchanged. The agent runs beside it, shares its market, snapshot and resolution tables, and keeps its own positions and bankroll so the two strategies can be compared cleanly. The git history shows each step.
 
@@ -167,7 +168,6 @@ powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
 | `PolyBot-Agent` | every 10 minutes | [`scripts/run_agent.sh`](scripts/run_agent.sh): one agent cycle, then a dashboard export |
 | `PolyBot-Discover` | every 15 minutes | [`scripts/run_discover.sh`](scripts/run_discover.sh): refresh the market catalog |
 | `PolyBot-Stream` | all the time | [`scripts/run_stream.sh`](scripts/run_stream.sh): the live recorder. Its trigger fires at login and every 5 minutes; extra starts are ignored while it runs, so the trigger also restarts it if it dies |
-
 | `PolyBot-Rollup` | once a day, about two hours after midnight UTC | [`scripts/run_rollup.sh`](scripts/run_rollup.sh): pack finished days into Parquet, copy new snapshots from SQLite, build one-minute bars |
 | `PolyBot-Paper` | every 5 minutes | [`scripts/run_paper.sh`](scripts/run_paper.sh): one PAPER trading cycle, then the status file |
 
@@ -179,7 +179,7 @@ Get-ScheduledTask PolyBot-* | Enable-ScheduledTask       # resume
 Get-ScheduledTask PolyBot-* | Get-ScheduledTaskInfo      # last run time and result
 ```
 
-**The PC must be awake and logged in.** The tasks survive a reboot (they start again at login, and a missed run fires straight away), but nothing can run while the PC is asleep or shut down. Every hour of sleep is an hour with no data. Keep it plugged in with sleep turned off, or wait for the always-on option on the roadmap.
+**The PC must be awake and logged in.** The tasks survive a reboot (they start again at login, and a missed run fires straight away), but nothing can run while the PC is asleep or shut down. Every hour of sleep is an hour with no data. [docs/always-on.md](docs/always-on.md) shows how to keep the PC awake, or how to move PolyBot to a small cloud server that never sleeps.
 
 ### Health, logs and failures
 
@@ -466,45 +466,24 @@ python -m polybot query "SELECT ..."  # ask the warehouse a question
 python -m polybot calibrate           # rebuild the calibration report and score the models
 python -m polybot paper               # one PAPER trading cycle (fake money)
 python -m polybot account             # the PAPER account at a glance
+python -m polybot run                 # every job on its timetable, until stopped (--plan shows it)
 ```
 
 **Upgrading an existing database?** Run `python -m polybot.resolutions --backfill` once. It checks every market that has already ended, rather than 50 per hour.
 
 The database lives at `polybot.db` in the project root. Set `POLYBOT_DB=/path/to/file.db` to use a different one. Databases created by v0.1 are migrated in place on first run.
 
-### Running it hourly (macOS)
+### Running it all the time: Docker, a cloud server or a Mac
 
-Save as `~/Library/LaunchAgents/com.jayzhang.polybot.plist`, replacing the paths. `RunAtLoad` starts it at login, so it survives a reboot. The Mac must be awake: launchd does not run jobs during sleep.
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.jayzhang.polybot</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/path/to/PolyBot/.venv/bin/python</string>
-    <string>-m</string><string>polybot.pipeline</string>
-  </array>
-  <key>WorkingDirectory</key><string>/path/to/PolyBot</string>
-  <key>StartInterval</key><integer>3600</integer>
-  <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>/path/to/PolyBot/launchd.out.log</string>
-  <key>StandardErrorPath</key><string>/path/to/PolyBot/launchd.err.log</string>
-</dict>
-</plist>
-```
-
-Load it, and reload it after any edit to the file:
+`polybot run` is the whole schedule in one process: it keeps the streamer running and starts the other five jobs on the same timetable as the Windows tasks, each as its own process. The [Dockerfile](Dockerfile) and [compose.yaml](compose.yaml) run it in a container, and [`scripts/com.jayzhang.polybot.plist`](scripts/com.jayzhang.polybot.plist) runs it under launchd on a Mac.
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.jayzhang.polybot.plist 2>/dev/null
-launchctl load -w ~/Library/LaunchAgents/com.jayzhang.polybot.plist
-launchctl list | grep polybot      # second column is the last exit code; 0 means the last run was fine
+docker compose up -d --build                    # on a server: build and start, restarts by itself
+docker compose exec polybot polybot health      # is it collecting data?
+python -m polybot run --plan                    # what runs when, and each job's next turn
 ```
 
-On Linux, a cron line does the same: `0 * * * * cd /path/to/PolyBot && .venv/bin/python -m polybot.pipeline`.
+**[docs/always-on.md](docs/always-on.md)** is the step-by-step guide: renting a server for about $5 a month, keeping the Windows PC awake, and the Mac setup.
 
 ## Project layout
 
@@ -543,6 +522,7 @@ polybot/
   agent.py         the 10-minute autonomous agent (v2)
   jobs.py          job lock and the job_runs record of every scheduled run
   logsetup.py      rotating log file with UTC timestamps
+  scheduler.py     `polybot run`: all the jobs on their timetable from one process
   health.py        the `polybot health` report
   cli.py           the `polybot` command
   app.py           Streamlit dashboard
@@ -550,7 +530,9 @@ config.yaml        filters and limits (no secrets)
 models/            forecast models, one file each, scored by the tracker
 reports/           the calibration report and its charts (generated, not in git)
 data/              live data and stream status (not in git)
-scripts/           dashboard export, job runners, scheduler installer, health check
+scripts/           dashboard export, job runners, Windows task installer, Mac launchd file, health check
+docs/              the static dashboard and the always-on guide
+Dockerfile         the container image; compose.yaml runs it with a data volume
 tests/             pytest suite (temporary database, no network)
 tests/fixtures/    real Gamma API responses saved for the parser tests
 ```
@@ -558,18 +540,19 @@ tests/fixtures/    real Gamma API responses saved for the parser tests
 ## Testing
 
 ```bash
-pytest          # 421 tests: pricing, storage, signals, settlement, resolutions, calibration,
+pytest          # 446 tests: pricing, storage, signals, settlement, resolutions, calibration,
                 # the agent (Kelly sizing, estimator, risk rules, settlement, learning),
                 # retries, the job lock, health, settings, discovery and the catalog,
                 # the order book, recorder and streamer (fake socket and clock),
                 # the warehouse views, the rollup steps and one-minute bars,
                 # the calibration tracker, the models and the report,
                 # simulated fills, the strategy, the PAPER ledger and the status file,
+                # the always-on scheduler (fake clock and processes),
                 # and parsers against saved API and websocket messages
 ruff check .
 ```
 
-CI runs both on every push and pull request, on Python 3.10 and 3.12.
+CI runs both on every push and pull request, on Python 3.10 and 3.12, and builds the Docker image.
 
 ## Roadmap
 
@@ -584,6 +567,7 @@ CI runs both on every push and pull request, on Python 3.10 and 3.12.
 - [x] **v2.4** Warehouse: Parquet by day, DuckDB views, SQLite migration, daily rollup with one-minute bars
 - [x] **v2.5** Calibration tracker: horizons, categories, `models/` folder, charts and Markdown report
 - [x] **v2.6** PAPER ledger: fills at the recorded bid and ask with depth and fees, edge-threshold strategy, status file
+- [x] **v2.7** Always-on option: `polybot run` scheduler, Dockerfile and compose file, Mac launchd file, guide
 - [ ] **v0.3** Strategy scorecard: P&L, max drawdown and Brier score per strategy, compared with the market baseline
 - [ ] **v0.4** Full-event fetching and a basket executor for neg-risk mispricings
 

@@ -1,0 +1,28 @@
+# What stays out of the Docker image: anything private, anything the bot makes while
+# it runs, and anything it does not need. The image holds code and settings only.
+.git
+.github
+.venv
+.env
+.env.*
+.streamlit/secrets.toml
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+*.egg-info
+data
+logs
+reports
+docs
+tests
+**/*.db
+**/*.db-journal
+**/*.db-wal
+**/*.db-shm
+**/*.db.lock*
+*.log
+paper_pnl.txt*
+Dockerfile
+compose.yaml
+.dockerignore

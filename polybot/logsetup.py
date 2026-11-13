@@ -38,6 +38,20 @@ def _formatter() -> logging.Formatter:
     return formatter
 
 
+def console_wanted() -> bool:
+    """Whether log lines should also go to the screen.
+
+    A scheduled job has no screen, so by default lines are echoed only when a person
+    is watching a terminal. ``POLYBOT_LOG_CONSOLE=1`` turns the echo on anyway (the
+    Docker image sets it, so ``docker compose logs`` shows what the jobs are doing);
+    ``POLYBOT_LOG_CONSOLE=0`` turns it off.
+    """
+    flag = os.environ.get("POLYBOT_LOG_CONSOLE", "").strip()
+    if flag in ("0", "1"):
+        return flag == "1"
+    return sys.stderr.isatty()
+
+
 def setup_logging(console: bool | None = None, name: str = LOG_NAME) -> Path:
     """Send all log messages to the rotating file (and to the screen when run by hand).
 
@@ -56,9 +70,8 @@ def setup_logging(console: bool | None = None, name: str = LOG_NAME) -> Path:
     handlers: list[logging.Handler] = [
         RotatingFileHandler(log_file(name), maxBytes=MAX_BYTES, backupCount=BACKUP_COUNT, encoding="utf-8")
     ]
-    # Under the scheduler there is no screen, so only echo when a person is watching.
     if console is None:
-        console = sys.stderr.isatty()
+        console = console_wanted()
     if console:
         handlers.append(logging.StreamHandler())
     for handler in handlers:
