@@ -75,8 +75,10 @@ def test_late_rows_for_a_packed_day_are_merged_in():
 
 def test_csv_with_a_damaged_line_is_packed_but_not_deleted(caplog):
     rawstore.append_rows("trades", TRADE_COLUMNS, [trade(f"{DAY}T10:00:00.000Z", "m1")])
-    with rawstore.raw_file("trades", DAY).open("a", encoding="utf-8") as f:
-        f.write(f"{DAY}T10:00:01.000Z,m1,0,not-a-number,1,BUY,0,0x\n")
+    # End the damaged line with \r\n, as the real writer (Python's csv module) does. A bare \n
+    # mixes line endings on Linux, which DuckDB cannot read, while Windows quietly turns it into \r\n.
+    with rawstore.raw_file("trades", DAY).open("a", newline="", encoding="utf-8") as f:
+        f.write(f"{DAY}T10:00:01.000Z,m1,0,not-a-number,1,BUY,0,0x\r\n")
     with caplog.at_level("WARNING"):
         assert pack("trades", DAY)["rows"] == 1
     assert rawstore.raw_file("trades", DAY).exists() and "keeping the CSV" in caplog.text
