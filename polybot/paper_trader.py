@@ -6,6 +6,7 @@ Every run:
   3. Check all open positions for market resolution
   4. Close resolved positions and update bankroll
 """
+
 from __future__ import annotations
 
 import json
@@ -30,13 +31,16 @@ MAX_NEW_PER_STRATEGY = 3  # concentration cap per cycle
 
 def _latest_snapshot(market_id: str) -> dict | None:
     with connect() as c:
-        row = c.execute("""
+        row = c.execute(
+            """
             SELECT s.yes_price, s.no_price, m.end_date, m.raw_json
             FROM snapshots s
             JOIN markets m ON m.id = s.market_id
             WHERE s.market_id = ?
             ORDER BY s.id DESC LIMIT 1
-        """, (market_id,)).fetchone()
+        """,
+            (market_id,),
+        ).fetchone()
     if not row:
         return None
     return dict(row)
@@ -54,11 +58,14 @@ def _open_position(signal: dict, bankroll: float) -> int | None:
     shares = round(stake / price, 4)
     now = datetime.now(timezone.utc).isoformat()
     with connect() as c:
-        cur = c.execute("""
+        cur = c.execute(
+            """
             INSERT INTO positions (market_id, question, side, entry_price, shares, stake,
                                    opened_at, opened_reason, status)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OPEN')
-        """, (signal["market_id"], signal["question"], side, price, shares, stake, now, signal["reason"]))
+        """,
+            (signal["market_id"], signal["question"], side, price, shares, stake, now, signal["reason"]),
+        )
         pos_id = cur.lastrowid
     record_bankroll_change(-stake, f"OPEN #{pos_id}")
     return pos_id
@@ -138,11 +145,14 @@ def _close_position(position: sqlite3.Row, winner: str | None, reason: str) -> N
         status = "CLOSED_LOSS"
 
     with connect() as c:
-        c.execute("""
+        c.execute(
+            """
             UPDATE positions
             SET closed_at = ?, close_price = ?, pnl = ?, close_reason = ?, status = ?
             WHERE id = ?
-        """, (now, close_price, round(pnl, 4), reason, status, position["id"]))
+        """,
+            (now, close_price, round(pnl, 4), reason, status, position["id"]),
+        )
     if proceeds > 0:
         record_bankroll_change(proceeds, f"CLOSE #{position['id']} {status}")
 
@@ -193,4 +203,4 @@ if __name__ == "__main__":
     print(f"  Open positions:  {s['open_positions']}")
     print(f"  Closed:          {s['closed_positions']}  (W: {s['wins']}, L: {s['losses']})")
     print(f"  Realized P&L:    ${s['realized_pnl']:.2f}")
-    print(f"  Win rate:        {s['win_rate']*100:.1f}%")
+    print(f"  Win rate:        {s['win_rate'] * 100:.1f}%")

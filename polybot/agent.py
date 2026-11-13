@@ -24,6 +24,7 @@ Honest caveat: the estimator only has price history and past resolutions to work
 shrinks toward the market price, so large edges are rare, and a cycle with zero opportunities is
 the expected outcome in an efficient market, not a bug.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -50,45 +51,123 @@ log = logging.getLogger("polybot.agent")
 # Configuration
 # ---------------------------------------------------------------------------
 SCAN_INTERVAL_MINUTES = 10
-FETCH_LIMIT = 2000               # markets pulled per scan, highest volume first
-MIN_LIQUIDITY = 10_000.0         # dollars
+FETCH_LIMIT = 2000  # markets pulled per scan, highest volume first
+MIN_LIQUIDITY = 10_000.0  # dollars
 MIN_DAYS_LEFT = 7.0
 # Calibration mode (paper trading only): raise to 8% once 50+ forecasts resolved and trust > 0.85
-MIN_EDGE = 0.015                 # 1.5 probability points
-KELLY_MULTIPLIER = 0.5           # half-Kelly
-MAX_STAKE_FRACTION = 0.06        # never risk more than 6% of bankroll on one market
-MAX_POSITIONS = 25               # diversify across more markets while calibrating
-MIN_STAKE = 2.0                  # dollars; smaller bets are skipped, not rounded up
-MAX_STAKE = 50.0                 # dollars; Kelly can balloon on low-edge, high-confidence markets
-STARTING_BANKROLL = 1000.0       # paper dollars, separate from the v1 bankroll
+MIN_EDGE = 0.015  # 1.5 probability points
+KELLY_MULTIPLIER = 0.5  # half-Kelly
+MAX_STAKE_FRACTION = 0.06  # never risk more than 6% of bankroll on one market
+MAX_POSITIONS = 25  # diversify across more markets while calibrating
+MIN_STAKE = 2.0  # dollars; smaller bets are skipped, not rounded up
+MAX_STAKE = 50.0  # dollars; Kelly can balloon on low-edge, high-confidence markets
+STARTING_BANKROLL = 1000.0  # paper dollars, separate from the v1 bankroll
 
-PRIOR_GAMMA = 1.10               # favorite-longshot prior: actual odds are more extreme than prices
-PRIOR_STRENGTH = 15.0            # pseudo-observations behind PRIOR_GAMMA when refitting
-MOMENTUM_K = 0.5                 # continuation: expect half of the last 24h move to repeat
-BASE_WEIGHT = 0.6                # weight of the calibrated base rate in the ensemble
-RECENCY_WEIGHT = 0.4             # weight of the recency signal in the ensemble
-MIN_EVIDENCE = 20                # resolved forecasts before accuracy can change a category's weight
-NEUTRAL_TRUST = 0.7              # category trust before there is any evidence
+PRIOR_GAMMA = 1.10  # favorite-longshot prior: actual odds are more extreme than prices
+PRIOR_STRENGTH = 15.0  # pseudo-observations behind PRIOR_GAMMA when refitting
+MOMENTUM_K = 0.5  # continuation: expect half of the last 24h move to repeat
+BASE_WEIGHT = 0.6  # weight of the calibrated base rate in the ensemble
+RECENCY_WEIGHT = 0.4  # weight of the recency signal in the ensemble
+MIN_EVIDENCE = 20  # resolved forecasts before accuracy can change a category's weight
+NEUTRAL_TRUST = 0.7  # category trust before there is any evidence
 MIN_TRUST, MAX_TRUST = 0.3, 1.0
-SKIP_RELOG_HOURS = 6             # do not repeat the same skip for a market more often than this
+SKIP_RELOG_HOURS = 6  # do not repeat the same skip for a market more often than this
 SCAN_RETENTION_HOURS = 24
-LOCK_WAIT_SECONDS = 180          # wait this long for the hourly pipeline; the task is killed after 9 minutes
-STALE_RUN_MINUTES = 15           # a run still marked 'running' after this long was killed mid-cycle
+LOCK_WAIT_SECONDS = 180  # wait this long for the hourly pipeline; the task is killed after 9 minutes
+STALE_RUN_MINUTES = 15  # a run still marked 'running' after this long was killed mid-cycle
 
 CATEGORIES = ("politics", "crypto", "sports", "science", "other")
 _KEYWORDS: dict[str, tuple[str, ...]] = {
-    "crypto": ("bitcoin", "btc", "ethereum", "eth ", "crypto", "solana", "xrp", "dogecoin", "token",
-               "coinbase", "binance", "stablecoin", "nft", "airdrop"),
-    "sports": ("nba", "nfl", "mlb", "nhl", "fifa", "world cup", "super bowl", "champions league",
-               "premier league", "ufc", "tennis", "wimbledon", "f1", "grand prix", "olympic",
-               "playoffs", "finals", "stanley cup", "la liga", "serie a", " vs "),
-    "politics": ("election", "president", "trump", "biden", "harris", "senate", "congress", "democrat",
-                 "republican", "prime minister", "parliament", "governor", "nominee", "ceasefire",
-                 "tariff", "sanction", "war ", "putin", "zelensky", "israel", "ukraine", "china",
-                 "supreme court", "impeach", "vote", "poll"),
-    "science": ("nasa", "spacex", "starship", "climate", "temperature", "hurricane", "earthquake",
-                "vaccine", "fda", "covid", "pandemic", "ai model", "openai", "gpt", "launch",
-                "asteroid", "mars", "nobel", "quantum", "measles", "bird flu"),
+    "crypto": (
+        "bitcoin",
+        "btc",
+        "ethereum",
+        "eth ",
+        "crypto",
+        "solana",
+        "xrp",
+        "dogecoin",
+        "token",
+        "coinbase",
+        "binance",
+        "stablecoin",
+        "nft",
+        "airdrop",
+    ),
+    "sports": (
+        "nba",
+        "nfl",
+        "mlb",
+        "nhl",
+        "fifa",
+        "world cup",
+        "super bowl",
+        "champions league",
+        "premier league",
+        "ufc",
+        "tennis",
+        "wimbledon",
+        "f1",
+        "grand prix",
+        "olympic",
+        "playoffs",
+        "finals",
+        "stanley cup",
+        "la liga",
+        "serie a",
+        " vs ",
+    ),
+    "politics": (
+        "election",
+        "president",
+        "trump",
+        "biden",
+        "harris",
+        "senate",
+        "congress",
+        "democrat",
+        "republican",
+        "prime minister",
+        "parliament",
+        "governor",
+        "nominee",
+        "ceasefire",
+        "tariff",
+        "sanction",
+        "war ",
+        "putin",
+        "zelensky",
+        "israel",
+        "ukraine",
+        "china",
+        "supreme court",
+        "impeach",
+        "vote",
+        "poll",
+    ),
+    "science": (
+        "nasa",
+        "spacex",
+        "starship",
+        "climate",
+        "temperature",
+        "hurricane",
+        "earthquake",
+        "vaccine",
+        "fda",
+        "covid",
+        "pandemic",
+        "ai model",
+        "openai",
+        "gpt",
+        "launch",
+        "asteroid",
+        "mars",
+        "nobel",
+        "quantum",
+        "measles",
+        "bird flu",
+    ),
 }
 
 
@@ -117,7 +196,7 @@ class MarketView:
     market_id: str
     question: str
     category: str
-    yes_price: float             # midpoint
+    yes_price: float  # midpoint
     best_bid: float | None
     best_ask: float | None
     liquidity: float
@@ -134,7 +213,7 @@ class Estimate:
     category: str
     market_prob: float
     estimated_prob: float
-    edge: float                  # estimated_prob - market_prob
+    edge: float  # estimated_prob - market_prob
     base_rate_prob: float
     recency_prob: float
     delta_24h: float | None
@@ -146,9 +225,9 @@ class Estimate:
 class Sizing:
     """Result of the sizing / rules check for one opportunity."""
 
-    action: str                  # 'OPEN' or 'SKIP'
+    action: str  # 'OPEN' or 'SKIP'
     reason: str
-    side: str | None = None      # 'YES' or 'NO'
+    side: str | None = None  # 'YES' or 'NO'
     entry_price: float | None = None
     win_prob: float | None = None
     exec_edge: float | None = None
@@ -261,9 +340,10 @@ def init_agent_tables() -> None:
         CREATE INDEX IF NOT EXISTS idx_agent_perf_cat ON agent_performance(category);
         """)
         if c.execute("SELECT COUNT(*) FROM agent_bankroll").fetchone()[0] == 0:
-            c.execute("INSERT INTO agent_bankroll (at, delta, balance_after, reason) "
-                      "VALUES (?, ?, ?, 'INITIAL_DEPOSIT')",
-                      (_now_iso(), STARTING_BANKROLL, STARTING_BANKROLL))
+            c.execute(
+                "INSERT INTO agent_bankroll (at, delta, balance_after, reason) VALUES (?, ?, ?, 'INITIAL_DEPOSIT')",
+                (_now_iso(), STARTING_BANKROLL, STARTING_BANKROLL),
+            )
 
 
 def _now_iso(now: datetime | None = None) -> str:
@@ -300,8 +380,9 @@ def calibrated_prob(price: float, gamma: float) -> float:
     return clip_prob(sigmoid(gamma * logit(price)))
 
 
-def fit_gamma(prices: list[float], outcomes: list[int], prior_gamma: float = PRIOR_GAMMA,
-              prior_strength: float = PRIOR_STRENGTH) -> float:
+def fit_gamma(
+    prices: list[float], outcomes: list[int], prior_gamma: float = PRIOR_GAMMA, prior_strength: float = PRIOR_STRENGTH
+) -> float:
     """Fit the calibration exponent to resolved markets by regularised log-loss.
 
     Minimises ``sum(logloss) + prior_strength * (gamma - prior_gamma)^2`` on a grid, so a
@@ -332,8 +413,9 @@ def recency_prob(price: float, delta_24h: float | None, k: float = MOMENTUM_K) -
     return clip_prob(price + k * delta_24h)
 
 
-def estimate_probability(view: MarketView, delta_24h: float | None, gamma: float, trust: float,
-                         params: Params | None = None) -> Estimate:
+def estimate_probability(
+    view: MarketView, delta_24h: float | None, gamma: float, trust: float, params: Params | None = None
+) -> Estimate:
     """Ensemble probability estimate for one market.
 
     ``base`` is the category-calibrated price and ``recency`` the momentum signal. They are
@@ -415,10 +497,16 @@ def to_market_view(m: dict, now: datetime | None = None) -> MarketView | None:
         return None
     question = m.get("question") or ""
     return MarketView(
-        market_id=str(mid), question=question, category=categorize(question, m.get("category")),
-        yes_price=yes, best_bid=_float(m.get("bestBid")), best_ask=_float(m.get("bestAsk")),
-        liquidity=_float(m.get("liquidity")) or 0.0, volume=_float(m.get("volume")) or 0.0,
-        days_left=(end - now).total_seconds() / 86400.0, raw=m,
+        market_id=str(mid),
+        question=question,
+        category=categorize(question, m.get("category")),
+        yes_price=yes,
+        best_bid=_float(m.get("bestBid")),
+        best_ask=_float(m.get("bestAsk")),
+        liquidity=_float(m.get("liquidity")) or 0.0,
+        volume=_float(m.get("volume")) or 0.0,
+        days_left=(end - now).total_seconds() / 86400.0,
+        raw=m,
     )
 
 
@@ -428,8 +516,9 @@ def is_eligible(view: MarketView, params: Params | None = None) -> bool:
     return view.liquidity > params.min_liquidity and view.days_left > params.min_days_left
 
 
-def recent_delta(market_id: str, now: datetime | None = None, hours: float = 24.0,
-                 conn: sqlite3.Connection | None = None) -> float | None:
+def recent_delta(
+    market_id: str, now: datetime | None = None, hours: float = 24.0, conn: sqlite3.Connection | None = None
+) -> float | None:
     """Change in YES price over the last ``hours`` hours, from stored snapshots.
 
     Compares the newest snapshot with the one closest to ``now - hours`` (within +/- 3 hours of
@@ -442,15 +531,21 @@ def recent_delta(market_id: str, now: datetime | None = None, hours: float = 24.
     try:
         target = now - timedelta(hours=hours)
         lo, hi = (target - timedelta(hours=3)).isoformat(), (target + timedelta(hours=3)).isoformat()
-        past = c.execute("""
+        past = c.execute(
+            """
             SELECT yes_price FROM snapshots
             WHERE market_id = ? AND captured_at BETWEEN ? AND ? AND yes_price IS NOT NULL
             ORDER BY ABS(julianday(captured_at) - julianday(?)) LIMIT 1
-        """, (market_id, lo, hi, target.isoformat())).fetchone()
-        latest = c.execute("""
+        """,
+            (market_id, lo, hi, target.isoformat()),
+        ).fetchone()
+        latest = c.execute(
+            """
             SELECT yes_price FROM snapshots WHERE market_id = ? AND yes_price IS NOT NULL
             ORDER BY id DESC LIMIT 1
-        """, (market_id,)).fetchone()
+        """,
+            (market_id,),
+        ).fetchone()
     finally:
         if own:
             c.close()
@@ -485,8 +580,10 @@ def agent_cash(c: sqlite3.Connection) -> float:
 def _bankroll_event(c: sqlite3.Connection, delta: float, reason: str, now: datetime | None = None) -> float:
     """Append a bankroll ledger entry and return the new cash balance."""
     new = agent_cash(c) + delta
-    c.execute("INSERT INTO agent_bankroll (at, delta, balance_after, reason) VALUES (?, ?, ?, ?)",
-              (_now_iso(now), delta, new, reason))
+    c.execute(
+        "INSERT INTO agent_bankroll (at, delta, balance_after, reason) VALUES (?, ?, ?, ?)",
+        (_now_iso(now), delta, new, reason),
+    )
     return new
 
 
@@ -499,8 +596,16 @@ def bankroll_at_cost(c: sqlite3.Connection) -> float:
 # ---------------------------------------------------------------------------
 # Sizing rules
 # ---------------------------------------------------------------------------
-def decide(view: MarketView, est: Estimate, *, bankroll: float, cash: float, open_count: int,
-           held_market_ids: set[str], params: Params | None = None) -> Sizing:
+def decide(
+    view: MarketView,
+    est: Estimate,
+    *,
+    bankroll: float,
+    cash: float,
+    open_count: int,
+    held_market_ids: set[str],
+    params: Params | None = None,
+) -> Sizing:
     """Apply the sizing and risk rules to one opportunity (``abs(edge) > min_edge`` already true).
 
     Order of checks: already holding the market, position limit, executable price, positive edge
@@ -519,45 +624,101 @@ def decide(view: MarketView, est: Estimate, *, bankroll: float, cash: float, ope
     win_prob = est.estimated_prob if side == "YES" else 1.0 - est.estimated_prob
     exec_edge = win_prob - price
     if exec_edge <= 0:
-        return Sizing("SKIP", f"edge_consumed_by_spread (exec edge {exec_edge:+.3f})", side=side,
-                      entry_price=price, win_prob=win_prob, exec_edge=exec_edge)
+        return Sizing(
+            "SKIP",
+            f"edge_consumed_by_spread (exec edge {exec_edge:+.3f})",
+            side=side,
+            entry_price=price,
+            win_prob=win_prob,
+            exec_edge=exec_edge,
+        )
 
     kelly = kelly_fraction(win_prob, price)
     stake = stake_for(win_prob, price, bankroll, params)
     capped = params.kelly_multiplier * kelly * bankroll > min(params.max_stake_fraction * bankroll, params.max_stake)
     if stake < params.min_stake:
-        return Sizing("SKIP", f"stake_below_minimum (${stake:.2f})", side=side, entry_price=price,
-                      win_prob=win_prob, exec_edge=exec_edge, kelly_fraction=kelly)
+        return Sizing(
+            "SKIP",
+            f"stake_below_minimum (${stake:.2f})",
+            side=side,
+            entry_price=price,
+            win_prob=win_prob,
+            exec_edge=exec_edge,
+            kelly_fraction=kelly,
+        )
     if stake > cash:
-        return Sizing("SKIP", f"insufficient_cash (need ${stake:.2f}, have ${cash:.2f})", side=side,
-                      entry_price=price, win_prob=win_prob, exec_edge=exec_edge, kelly_fraction=kelly)
+        return Sizing(
+            "SKIP",
+            f"insufficient_cash (need ${stake:.2f}, have ${cash:.2f})",
+            side=side,
+            entry_price=price,
+            win_prob=win_prob,
+            exec_edge=exec_edge,
+            kelly_fraction=kelly,
+        )
     note = f"opened {side}; half-Kelly {kelly * params.kelly_multiplier:.1%} of bankroll"
     if capped:
         note += f", capped at ${stake:.2f}"
-    return Sizing("OPEN", note, side=side, entry_price=price, win_prob=win_prob, exec_edge=exec_edge,
-                  kelly_fraction=kelly, stake=stake)
+    return Sizing(
+        "OPEN",
+        note,
+        side=side,
+        entry_price=price,
+        win_prob=win_prob,
+        exec_edge=exec_edge,
+        kelly_fraction=kelly,
+        stake=stake,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Logging and execution
 # ---------------------------------------------------------------------------
-def log_decision(c: sqlite3.Connection, run_id: int | None, view: MarketView, est: Estimate,
-                 sizing: Sizing, now: datetime | None = None) -> int:
+def log_decision(
+    c: sqlite3.Connection,
+    run_id: int | None,
+    view: MarketView,
+    est: Estimate,
+    sizing: Sizing,
+    now: datetime | None = None,
+) -> int:
     """Insert one audit row into ``agent_decisions`` and return its id."""
     import json
 
-    components = {"base_rate_prob": round(est.base_rate_prob, 4), "recency_prob": round(est.recency_prob, 4),
-                  "delta_24h": None if est.delta_24h is None else round(est.delta_24h, 4),
-                  "gamma": est.gamma, "trust": est.trust, "liquidity": view.liquidity,
-                  "days_left": round(view.days_left, 1), "exec_edge": sizing.exec_edge,
-                  "kelly_fraction": round(sizing.kelly_fraction, 4)}
-    cur = c.execute("""
+    components = {
+        "base_rate_prob": round(est.base_rate_prob, 4),
+        "recency_prob": round(est.recency_prob, 4),
+        "delta_24h": None if est.delta_24h is None else round(est.delta_24h, 4),
+        "gamma": est.gamma,
+        "trust": est.trust,
+        "liquidity": view.liquidity,
+        "days_left": round(view.days_left, 1),
+        "exec_edge": sizing.exec_edge,
+        "kelly_fraction": round(sizing.kelly_fraction, 4),
+    }
+    cur = c.execute(
+        """
         INSERT INTO agent_decisions (timestamp, run_id, market_id, question, category, market_prob,
             estimated_prob, edge, kelly_stake, action_taken, reason, side, entry_price, components_json)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (_now_iso(now), run_id, view.market_id, view.question, view.category, est.market_prob,
-          est.estimated_prob, est.edge, sizing.stake, sizing.action, sizing.reason, sizing.side,
-          sizing.entry_price, json.dumps(components)))
+    """,
+        (
+            _now_iso(now),
+            run_id,
+            view.market_id,
+            view.question,
+            view.category,
+            est.market_prob,
+            est.estimated_prob,
+            est.edge,
+            sizing.stake,
+            sizing.action,
+            sizing.reason,
+            sizing.side,
+            sizing.entry_price,
+            json.dumps(components),
+        ),
+    )
     return int(cur.lastrowid)
 
 
@@ -565,24 +726,48 @@ def _recently_skipped(c: sqlite3.Connection, market_id: str, reason: str, now: d
     """True if the same skip reason was already logged for this market within SKIP_RELOG_HOURS."""
     cutoff = (now - timedelta(hours=SKIP_RELOG_HOURS)).isoformat()
     key = reason.split(" (")[0]
-    row = c.execute("""
+    row = c.execute(
+        """
         SELECT 1 FROM agent_decisions
         WHERE market_id = ? AND action_taken = 'SKIP' AND reason LIKE ? AND timestamp >= ? LIMIT 1
-    """, (market_id, key + "%", cutoff)).fetchone()
+    """,
+        (market_id, key + "%", cutoff),
+    ).fetchone()
     return row is not None
 
 
-def open_position(c: sqlite3.Connection, view: MarketView, est: Estimate, sizing: Sizing,
-                  decision_id: int, now: datetime | None = None) -> int:
+def open_position(
+    c: sqlite3.Connection,
+    view: MarketView,
+    est: Estimate,
+    sizing: Sizing,
+    decision_id: int,
+    now: datetime | None = None,
+) -> int:
     """Open a paper position and debit the agent's cash. Returns the position id."""
     assert sizing.side and sizing.entry_price
     shares = round(sizing.stake / sizing.entry_price, 4)
-    cur = c.execute("""
+    cur = c.execute(
+        """
         INSERT INTO agent_positions (market_id, question, category, side, entry_price, shares, stake,
             market_prob, estimated_prob, edge, opened_at, decision_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (view.market_id, view.question, view.category, sizing.side, sizing.entry_price, shares,
-          sizing.stake, est.market_prob, est.estimated_prob, est.edge, _now_iso(now), decision_id))
+    """,
+        (
+            view.market_id,
+            view.question,
+            view.category,
+            sizing.side,
+            sizing.entry_price,
+            shares,
+            sizing.stake,
+            est.market_prob,
+            est.estimated_prob,
+            est.edge,
+            _now_iso(now),
+            decision_id,
+        ),
+    )
     pid = int(cur.lastrowid)
     _bankroll_event(c, -sizing.stake, f"AGENT OPEN #{pid}", now)
     return pid
@@ -596,8 +781,9 @@ def settle_positions(now: datetime | None = None, fetch: Callable[[list[str]], l
     """
     fetch = fetch or fetch_markets_by_id
     with connect() as c:
-        held = [r["market_id"] for r in c.execute(
-            "SELECT DISTINCT market_id FROM agent_positions WHERE status = 'OPEN'")]
+        held = [
+            r["market_id"] for r in c.execute("SELECT DISTINCT market_id FROM agent_positions WHERE status = 'OPEN'")
+        ]
     if not held:
         return 0
     try:
@@ -620,8 +806,10 @@ def settle_positions(now: datetime | None = None, fetch: Callable[[list[str]], l
                 proceeds, status, close_price = p["shares"], "CLOSED_WIN", 1.0
             else:
                 proceeds, status, close_price = 0.0, "CLOSED_LOSS", 0.0
-            c.execute("UPDATE agent_positions SET status = ?, closed_at = ?, close_price = ?, pnl = ? WHERE id = ?",
-                      (status, _now_iso(now), close_price, round(proceeds - p["stake"], 4), p["id"]))
+            c.execute(
+                "UPDATE agent_positions SET status = ?, closed_at = ?, close_price = ?, pnl = ? WHERE id = ?",
+                (status, _now_iso(now), close_price, round(proceeds - p["stake"], 4), p["id"]),
+            )
             _bankroll_event(c, proceeds, f"AGENT CLOSE #{p['id']} {status}", now)
             closed += 1
     return closed
@@ -678,11 +866,14 @@ def learn(now: datetime | None = None) -> dict[str, dict]:
             trust = NEUTRAL_TRUST
             if stats["n"] >= MIN_EVIDENCE and stats["skill"] is not None:
                 trust = max(MIN_TRUST, min(MAX_TRUST, NEUTRAL_TRUST + stats["skill"]))
-            c.execute("""
+            c.execute(
+                """
                 INSERT INTO agent_priors (category, gamma, n_obs, trust, updated_at) VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(category) DO UPDATE SET gamma = excluded.gamma, n_obs = excluded.n_obs,
                     trust = excluded.trust, updated_at = excluded.updated_at
-            """, (cat, gamma, len(fc), trust, stamp))
+            """,
+                (cat, gamma, len(fc), trust, stamp),
+            )
             _log_performance(c, stamp, cat, stats, gamma)
             result[cat] = {"gamma": gamma, "trust": trust, "n_forecasts": len(fc), **stats}
         _log_performance(c, stamp, "ALL", _decision_stats(decisions), None)
@@ -696,8 +887,9 @@ def _decision_stats(decs: list[sqlite3.Row]) -> dict:
     pairs_market = [(d["market_prob"], o) for (_, o), d in zip(pairs_agent, decs, strict=True)]
     agent_b, market_b = _brier(pairs_agent), _brier(pairs_market)
     skill = (1 - agent_b / market_b) if agent_b is not None and market_b else None
-    signed = [(o - d["market_prob"]) * (1 if d["edge"] > 0 else -1)
-              for (_, o), d in zip(pairs_agent, decs, strict=True)]
+    signed = [
+        (o - d["market_prob"]) * (1 if d["edge"] > 0 else -1) for (_, o), d in zip(pairs_agent, decs, strict=True)
+    ]
     predicted = [abs(d["edge"]) for d in decs]
     capture = (sum(signed) / sum(predicted)) if predicted and sum(predicted) > 0 else None
     return {"n": len(decs), "agent_brier": agent_b, "market_brier": market_b, "skill": skill, "edge_capture": capture}
@@ -705,24 +897,37 @@ def _decision_stats(decs: list[sqlite3.Row]) -> dict:
 
 def _log_performance(c: sqlite3.Connection, stamp: str, cat: str, stats: dict, gamma: float | None) -> None:
     """Insert an ``agent_performance`` row if the resolved count for ``cat`` changed since the last row."""
-    last = c.execute("SELECT n_resolved FROM agent_performance WHERE category = ? ORDER BY id DESC LIMIT 1",
-                     (cat,)).fetchone()
+    last = c.execute(
+        "SELECT n_resolved FROM agent_performance WHERE category = ? ORDER BY id DESC LIMIT 1", (cat,)
+    ).fetchone()
     if last is not None and last["n_resolved"] == stats["n"]:
         return
     if last is None and stats["n"] == 0:
         return
-    c.execute("""
+    c.execute(
+        """
         INSERT INTO agent_performance (computed_at, category, n_resolved, agent_brier, market_brier,
                                        brier_skill, edge_capture, gamma) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (stamp, cat, stats["n"], stats["agent_brier"], stats["market_brier"], stats["skill"],
-          stats["edge_capture"], gamma))
+    """,
+        (
+            stamp,
+            cat,
+            stats["n"],
+            stats["agent_brier"],
+            stats["market_brier"],
+            stats["skill"],
+            stats["edge_capture"],
+            gamma,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
 # The cycle
 # ---------------------------------------------------------------------------
-def scan(markets: list[dict], params: Params | None = None, now: datetime | None = None
-         ) -> tuple[list[tuple[MarketView, Estimate]], int]:
+def scan(
+    markets: list[dict], params: Params | None = None, now: datetime | None = None
+) -> tuple[list[tuple[MarketView, Estimate]], int]:
     """Estimate every eligible market. Returns ``(pairs, n_parsed)`` sorted by ``abs(edge)`` descending."""
     params = params or Params()
     now = now or datetime.now(timezone.utc)
@@ -744,8 +949,12 @@ def scan(markets: list[dict], params: Params | None = None, now: datetime | None
     return pairs, parsed
 
 
-def run_cycle(markets: list[dict] | None = None, params: Params | None = None, now: datetime | None = None,
-              fetch_by_id: Callable[[list[str]], list[dict]] | None = None) -> dict:
+def run_cycle(
+    markets: list[dict] | None = None,
+    params: Params | None = None,
+    now: datetime | None = None,
+    fetch_by_id: Callable[[list[str]], list[dict]] | None = None,
+) -> dict:
     """Run one full agent cycle and return a summary dict.
 
     ``markets`` and ``fetch_by_id`` can be injected (tests do) instead of calling the live API.
@@ -755,10 +964,18 @@ def run_cycle(markets: list[dict] | None = None, params: Params | None = None, n
     init_agent_tables()
     with connect() as c:
         _close_stale_runs(c, now)
-        run_id = int(c.execute("INSERT INTO agent_runs (started_at, status) VALUES (?, 'running')",
-                               (_now_iso(now),)).lastrowid)
-    summary = {"run_id": run_id, "scanned": 0, "eligible": 0, "opportunities": 0, "opened": 0,
-               "skipped": 0, "settled": 0}
+        run_id = int(
+            c.execute("INSERT INTO agent_runs (started_at, status) VALUES (?, 'running')", (_now_iso(now),)).lastrowid
+        )
+    summary = {
+        "run_id": run_id,
+        "scanned": 0,
+        "eligible": 0,
+        "opportunities": 0,
+        "opened": 0,
+        "skipped": 0,
+        "settled": 0,
+    }
     try:
         if markets is None:
             markets = fetch_active_markets(limit=FETCH_LIMIT)
@@ -778,31 +995,55 @@ def run_cycle(markets: list[dict] | None = None, params: Params | None = None, n
 def _close_stale_runs(c: sqlite3.Connection, now: datetime) -> None:
     """Mark runs that never finished as failed, so a killed cycle does not look busy forever."""
     cutoff = (now - timedelta(minutes=STALE_RUN_MINUTES)).isoformat()
-    c.execute("UPDATE agent_runs SET status = 'failed', finished_at = ?, error = ? "
-              "WHERE status = 'running' AND started_at < ?", (_now_iso(now), INTERRUPTED, cutoff))
+    c.execute(
+        "UPDATE agent_runs SET status = 'failed', finished_at = ?, error = ? "
+        "WHERE status = 'running' AND started_at < ?",
+        (_now_iso(now), INTERRUPTED, cutoff),
+    )
 
 
-def _execute(pairs: list[tuple[MarketView, Estimate]], params: Params, now: datetime, run_id: int,
-             summary: dict) -> None:
+def _execute(
+    pairs: list[tuple[MarketView, Estimate]], params: Params, now: datetime, run_id: int, summary: dict
+) -> None:
     """Store the live scan feed, then size and (paper) execute every qualifying opportunity."""
     with connect() as c:
         cutoff = (now - timedelta(hours=SCAN_RETENTION_HOURS)).isoformat()
         c.execute("DELETE FROM agent_scan WHERE scanned_at < ?", (cutoff,))
         for view, est in pairs[:200]:
-            c.execute("""
+            c.execute(
+                """
                 INSERT INTO agent_scan (run_id, scanned_at, market_id, question, category, market_prob,
                     estimated_prob, edge, liquidity, days_left, qualifies) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (run_id, _now_iso(now), view.market_id, view.question, view.category, est.market_prob,
-                  est.estimated_prob, est.edge, view.liquidity, view.days_left,
-                  1 if abs(est.edge) > params.min_edge else 0))
+            """,
+                (
+                    run_id,
+                    _now_iso(now),
+                    view.market_id,
+                    view.question,
+                    view.category,
+                    est.market_prob,
+                    est.estimated_prob,
+                    est.edge,
+                    view.liquidity,
+                    view.days_left,
+                    1 if abs(est.edge) > params.min_edge else 0,
+                ),
+            )
 
         opportunities = [(v, e) for v, e in pairs if abs(e.edge) > params.min_edge]
         summary["opportunities"] = len(opportunities)
         held = {r["market_id"] for r in c.execute("SELECT market_id FROM agent_positions WHERE status = 'OPEN'")}
         open_count = len(held)
         for view, est in opportunities:  # already ranked by edge size
-            sizing = decide(view, est, bankroll=bankroll_at_cost(c), cash=agent_cash(c), open_count=open_count,
-                            held_market_ids=held, params=params)
+            sizing = decide(
+                view,
+                est,
+                bankroll=bankroll_at_cost(c),
+                cash=agent_cash(c),
+                open_count=open_count,
+                held_market_ids=held,
+                params=params,
+            )
             if sizing.action == "SKIP" and _recently_skipped(c, view.market_id, sizing.reason, now):
                 continue
             decision_id = log_decision(c, run_id, view, est, sizing, now)
@@ -818,11 +1059,24 @@ def _execute(pairs: list[tuple[MarketView, Estimate]], params: Params, now: date
 def _finish_run(run_id: int, status: str, summary: dict, error: str | None, now: datetime) -> None:
     """Close out the ``agent_runs`` row for this cycle."""
     with connect() as c:
-        c.execute("""
+        c.execute(
+            """
             UPDATE agent_runs SET finished_at = ?, status = ?, scanned = ?, eligible = ?, opportunities = ?,
                 opened = ?, skipped = ?, settled = ?, error = ? WHERE id = ?
-        """, (_now_iso(), status, summary["scanned"], summary["eligible"], summary["opportunities"],
-              summary["opened"], summary["skipped"], summary["settled"], error, run_id))
+        """,
+            (
+                _now_iso(),
+                status,
+                summary["scanned"],
+                summary["eligible"],
+                summary["opportunities"],
+                summary["opened"],
+                summary["skipped"],
+                summary["settled"],
+                error,
+                run_id,
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -843,13 +1097,17 @@ def export_state(c: sqlite3.Connection, limit_decisions: int = 150) -> dict:
 
     last_run = rows("SELECT * FROM agent_runs ORDER BY id DESC LIMIT 1")
     scan_run = c.execute("SELECT MAX(run_id) FROM agent_scan").fetchone()[0]
-    feed = rows("SELECT * FROM agent_scan WHERE run_id = ? ORDER BY ABS(edge) DESC LIMIT 40",
-                (scan_run,)) if scan_run else []
+    feed = (
+        rows("SELECT * FROM agent_scan WHERE run_id = ? ORDER BY ABS(edge) DESC LIMIT 40", (scan_run,))
+        if scan_run
+        else []
+    )
 
     positions = []
     for p in rows("SELECT * FROM agent_positions WHERE status = 'OPEN' ORDER BY opened_at DESC"):
-        snap = c.execute("SELECT yes_price FROM snapshots WHERE market_id = ? ORDER BY id DESC LIMIT 1",
-                         (p["market_id"],)).fetchone()
+        snap = c.execute(
+            "SELECT yes_price FROM snapshots WHERE market_id = ? ORDER BY id DESC LIMIT 1", (p["market_id"],)
+        ).fetchone()
         yes = snap["yes_price"] if snap else None
         mark = None if yes is None else (yes if p["side"] == "YES" else 1 - yes)
         p["current_price"] = mark
@@ -867,16 +1125,28 @@ def export_state(c: sqlite3.Connection, limit_decisions: int = 150) -> dict:
     priors = rows("SELECT category, gamma, n_obs, trust FROM agent_priors ORDER BY category")
     return {
         "enabled": True,
-        "config": {"min_edge": MIN_EDGE, "kelly_multiplier": KELLY_MULTIPLIER, "max_stake_fraction": MAX_STAKE_FRACTION,
-                   "max_positions": MAX_POSITIONS, "min_stake": MIN_STAKE,
-                   "max_stake": MAX_STAKE, "mode": "calibration", "min_liquidity": MIN_LIQUIDITY,
-                   "min_days_left": MIN_DAYS_LEFT,
-                   "interval_minutes": SCAN_INTERVAL_MINUTES},
+        "config": {
+            "min_edge": MIN_EDGE,
+            "kelly_multiplier": KELLY_MULTIPLIER,
+            "max_stake_fraction": MAX_STAKE_FRACTION,
+            "max_positions": MAX_POSITIONS,
+            "min_stake": MIN_STAKE,
+            "max_stake": MAX_STAKE,
+            "mode": "calibration",
+            "min_liquidity": MIN_LIQUIDITY,
+            "min_days_left": MIN_DAYS_LEFT,
+            "interval_minutes": SCAN_INTERVAL_MINUTES,
+        },
         "last_run": last_run[0] if last_run else None,
-        "summary": {"cash": cash, "equity": cash + open_value, "starting_bankroll": STARTING_BANKROLL,
-                    "realized_pnl": realized, "open_count": len(positions),
-                    "decisions": c.execute("SELECT COUNT(*) FROM agent_decisions").fetchone()[0],
-                    "opened_total": c.execute("SELECT COUNT(*) FROM agent_positions").fetchone()[0]},
+        "summary": {
+            "cash": cash,
+            "equity": cash + open_value,
+            "starting_bankroll": STARTING_BANKROLL,
+            "realized_pnl": realized,
+            "open_count": len(positions),
+            "decisions": c.execute("SELECT COUNT(*) FROM agent_decisions").fetchone()[0],
+            "opened_total": c.execute("SELECT COUNT(*) FROM agent_positions").fetchone()[0],
+        },
         "feed": feed,
         "positions": positions,
         "closed": closed,
@@ -889,9 +1159,11 @@ def export_state(c: sqlite3.Connection, limit_decisions: int = 150) -> dict:
 
 def summary_line(s: dict, min_edge: float) -> str:
     """One line describing a finished cycle, for the log and the job_runs table."""
-    return (f"parsed {s['scanned']} markets, {s['eligible']} eligible, "
-            f"{s['opportunities']} opportunities (|edge| > {min_edge:.1%}), "
-            f"opened {s['opened']}, skipped {s['skipped']}, settled {s['settled']}")
+    return (
+        f"parsed {s['scanned']} markets, {s['eligible']} eligible, "
+        f"{s['opportunities']} opportunities (|edge| > {min_edge:.1%}), "
+        f"opened {s['opened']}, skipped {s['skipped']}, settled {s['settled']}"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -900,13 +1172,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-edge", type=float, default=MIN_EDGE, help="Edge threshold (default 0.015)")
     args = parser.parse_args(argv)
     params = Params(min_edge=args.min_edge)
-    return run_job("agent", lambda: summary_line(run_cycle(params=params), params.min_edge),
-                   wait_seconds=LOCK_WAIT_SECONDS)
+    return run_job(
+        "agent", lambda: summary_line(run_cycle(params=params), params.min_edge), wait_seconds=LOCK_WAIT_SECONDS
+    )
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["Params", "MarketView", "Estimate", "Sizing", "run_cycle", "kelly_fraction", "stake_for",
-           "estimate_probability", "export_state"]
+__all__ = [
+    "Params",
+    "MarketView",
+    "Estimate",
+    "Sizing",
+    "run_cycle",
+    "kelly_fraction",
+    "stake_for",
+    "estimate_probability",
+    "export_state",
+]

@@ -22,8 +22,9 @@ def test_resolved_at_prefers_close_time():
 
 def test_ended_markets_are_checked_and_resolved(monkeypatch):
     save_snapshot([make_market("old", yes=0.3, days_out=-2), make_market("live", yes=0.3)])
-    monkeypatch.setattr(resolutions, "fetch_markets_by_id",
-                        lambda ids: [make_market(i, yes=1.0, closed=True, days_out=-2) for i in ids])
+    monkeypatch.setattr(
+        resolutions, "fetch_markets_by_id", lambda ids: [make_market(i, yes=1.0, closed=True, days_out=-2) for i in ids]
+    )
     assert resolutions.markets_to_check() == ["old"]
     assert resolutions.sweep() == {"checked": 1, "resolved": 1}
     assert resolutions.counts() == {"YES": 1}
@@ -33,8 +34,11 @@ def test_ended_markets_are_checked_and_resolved(monkeypatch):
 
 def test_unresolved_markets_wait_before_recheck(monkeypatch):
     save_snapshot([make_market("old", yes=0.3, days_out=-2)])
-    monkeypatch.setattr(resolutions, "fetch_markets_by_id",
-                        lambda ids: [make_market(i, yes=0.3, closed=False, days_out=-2) for i in ids])
+    monkeypatch.setattr(
+        resolutions,
+        "fetch_markets_by_id",
+        lambda ids: [make_market(i, yes=0.3, closed=False, days_out=-2) for i in ids],
+    )
     assert resolutions.sweep()["checked"] == 1
     assert resolutions.counts() == {"PENDING": 1}
     assert resolutions.markets_to_check() == []
@@ -56,6 +60,7 @@ def test_failed_fetch_still_counts_as_checked(monkeypatch):
 
 def test_backfill_drains_all_candidates(monkeypatch):
     save_snapshot([make_market(str(i), yes=0.3, days_out=-2) for i in range(5)])
-    monkeypatch.setattr(resolutions, "fetch_markets_by_id",
-                        lambda ids: [make_market(i, yes=0.0, closed=True, days_out=-2) for i in ids])
+    monkeypatch.setattr(
+        resolutions, "fetch_markets_by_id", lambda ids: [make_market(i, yes=0.0, closed=True, days_out=-2) for i in ids]
+    )
     assert resolutions.backfill(batch=2) == {"checked": 5, "resolved": 5}

@@ -12,6 +12,7 @@ Traded signals:
 Watchlist only (not traded yet, see `mispricing_candidates`):
   - odds_mismatch : neg-risk events whose outcome prices don't sum to 1
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -28,7 +29,8 @@ MAX_SNAPSHOT_AGE_HOURS = 3
 def _latest_snapshots() -> list[sqlite3.Row]:
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=MAX_SNAPSHOT_AGE_HOURS)).isoformat()
     with connect() as c:
-        return c.execute("""
+        return c.execute(
+            """
             SELECT m.id AS market_id, m.question, m.end_date, m.category, m.slug,
                    m.event_id, m.neg_risk,
                    s.yes_price, s.no_price, s.best_bid, s.best_ask, s.volume, s.captured_at
@@ -36,7 +38,9 @@ def _latest_snapshots() -> list[sqlite3.Row]:
             JOIN snapshots s ON s.market_id = m.id
             WHERE s.id = (SELECT MAX(id) FROM snapshots WHERE market_id = m.id)
               AND s.captured_at >= ?
-        """, (cutoff,)).fetchall()
+        """,
+            (cutoff,),
+        ).fetchall()
 
 
 def _parse_end(end_str: str | None) -> datetime | None:
@@ -101,8 +105,7 @@ def longshot_signals(exclude: set[str]) -> list[dict]:
             continue
         if not _valid_time_window(r["end_date"], LONGSHOT_MIN_DAYS, LONGSHOT_MAX_DAYS):
             continue
-        sig = _signal(r, "longshot", "NO",
-                      f"Longshot fade: YES={yes:.3f}, vol=${vol:,.0f}, buying NO")
+        sig = _signal(r, "longshot", "NO", f"Longshot fade: YES={yes:.3f}, vol=${vol:,.0f}, buying NO")
         if sig:
             signals.append(sig)
     return signals
@@ -112,11 +115,11 @@ def longshot_signals(exclude: set[str]) -> list[dict]:
 # SIGNAL 2 — 24-hour momentum
 # ============================================================================
 
-MOMENTUM_MIN_MOVE = 0.10   # 10 percentage points
+MOMENTUM_MIN_MOVE = 0.10  # 10 percentage points
 MOMENTUM_MIN_VOL = 500_000
 MOMENTUM_MIN_DAYS = 3
 MOMENTUM_MAX_DAYS = 1200
-MOMENTUM_MIN_YES = 0.15    # skip markets already near 0 or 1
+MOMENTUM_MIN_YES = 0.15  # skip markets already near 0 or 1
 MOMENTUM_MAX_YES = 0.85
 
 
@@ -127,11 +130,14 @@ def momentum_signals(exclude: set[str]) -> list[dict]:
         for r in _latest_snapshots():
             if r["market_id"] in exclude or r["yes_price"] is None:
                 continue
-            prior = c.execute("""
+            prior = c.execute(
+                """
                 SELECT yes_price FROM snapshots
                 WHERE market_id = ? AND datetime(captured_at) <= datetime(?, '-20 hours')
                 ORDER BY id DESC LIMIT 1
-            """, (r["market_id"], r["captured_at"])).fetchone()
+            """,
+                (r["market_id"], r["captured_at"]),
+            ).fetchone()
             if not prior or prior["yes_price"] is None:
                 continue
 
@@ -186,14 +192,16 @@ def mispricing_candidates() -> list[dict]:
         best = max((e for e in (yes_edge, no_edge) if e is not None), default=None)
         if best is None or best < MISMATCH_MIN_EDGE:
             continue
-        out.append({
-            "event_id": event_id,
-            "legs_seen": n,
-            "mid_sum": round(mid_sum, 4),
-            "yes_basket_edge": round(yes_edge, 4) if yes_edge is not None else None,
-            "no_basket_edge": round(no_edge, 4) if no_edge is not None else None,
-            "example_question": legs[0]["question"],
-        })
+        out.append(
+            {
+                "event_id": event_id,
+                "legs_seen": n,
+                "mid_sum": round(mid_sum, 4),
+                "yes_basket_edge": round(yes_edge, 4) if yes_edge is not None else None,
+                "no_basket_edge": round(no_edge, 4) if no_edge is not None else None,
+                "example_question": legs[0]["question"],
+            }
+        )
     return sorted(out, key=lambda d: -max(d["yes_basket_edge"] or 0, d["no_basket_edge"] or 0))
 
 
@@ -228,5 +236,7 @@ if __name__ == "__main__":
     cands = mispricing_candidates()
     print(f"{len(cands)} neg-risk mispricing candidates (watchlist, not traded)")
     for c in cands[:10]:
-        print(f"  event {c['event_id']}: {c['legs_seen']} legs, mid sum {c['mid_sum']}, "
-              f"YES-basket edge {c['yes_basket_edge']}, NO-basket edge {c['no_basket_edge']}")
+        print(
+            f"  event {c['event_id']}: {c['legs_seen']} legs, mid sum {c['mid_sum']}, "
+            f"YES-basket edge {c['yes_basket_edge']}, NO-basket edge {c['no_basket_edge']}"
+        )

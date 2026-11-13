@@ -266,6 +266,7 @@ def test_report_files_are_written(monkeypatch):
     assert "| politics | 7 |" in text and "| sports | 5 |" in text
     assert "| favorite_longshot | 12 |" in text and "too few markets to say" in text
     assert "![Calibration curve, 1 day before](calibration_1d.png)" in text
+    assert "scored on 100 markets" in text and "{" not in text  # every placeholder was filled in
     summary = tracker.summary_for_status(report)
     assert summary["markets_1d"] == 12 and summary["markets_7d"] == 6 and 0 < summary["brier_market_1d"] < 0.25
 

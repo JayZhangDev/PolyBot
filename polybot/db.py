@@ -5,6 +5,7 @@ The path comes from the POLYBOT_DB environment variable when set, otherwise
 path in every module) means the pipeline, dashboard and tests all hit the same
 file no matter which directory they are launched from.
 """
+
 from __future__ import annotations
 
 import os

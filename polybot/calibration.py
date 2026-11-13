@@ -15,6 +15,7 @@ Metrics:
 snapshot where its price was already pinned to its final value, so a market
 that was effectively decided early isn't scored on post-decision prices.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -36,8 +37,8 @@ LONGSHOT_MAX = 0.15  # matches the longshot signal threshold
 class Forecast:
     market_id: str
     question: str
-    price: float      # YES price at the horizon
-    outcome: int      # 1 if YES resolved, 0 if NO
+    price: float  # YES price at the horizon
+    outcome: int  # 1 if YES resolved, 0 if NO
 
 
 def brier(prices: list[float], outcomes: list[int]) -> float:
@@ -64,22 +65,27 @@ def reliability_bins(prices: list[float], outcomes: list[int], n_bins: int = N_B
     for i, b in enumerate(buckets):
         if not b:
             continue
-        out.append({
-            "bin": f"{i / n_bins:.1f}–{(i + 1) / n_bins:.1f}",
-            "mean_price": sum(p for p, _ in b) / len(b),
-            "observed_rate": sum(o for _, o in b) / len(b),
-            "count": len(b),
-        })
+        out.append(
+            {
+                "bin": f"{i / n_bins:.1f}–{(i + 1) / n_bins:.1f}",
+                "mean_price": sum(p for p, _ in b) / len(b),
+                "observed_rate": sum(o for _, o in b) / len(b),
+                "count": len(b),
+            }
+        )
     return out
 
 
 def _effective_resolution(market_id: str, resolved_at: str, outcome: str, c) -> str:
     """Earlier of the close time and the first snapshot pinned at the final price."""
-    pinned = (f"yes_price >= {PINNED_HI}" if outcome == "YES" else f"yes_price <= {PINNED_LO}")
-    row = c.execute(f"""
+    pinned = f"yes_price >= {PINNED_HI}" if outcome == "YES" else f"yes_price <= {PINNED_LO}"
+    row = c.execute(
+        f"""
         SELECT MIN(captured_at) AS t FROM snapshots
         WHERE market_id = ? AND {pinned}
-    """, (market_id,)).fetchone()
+    """,
+        (market_id,),
+    ).fetchone()
     first_pinned = parse_ts(row["t"]) if row and row["t"] else None
     closed = parse_ts(resolved_at)
     candidates = [t for t in (first_pinned, closed) if t is not None]
@@ -99,15 +105,17 @@ def forecasts(horizon_days: int) -> list[Forecast]:
         for r in resolved:
             effective = parse_ts(_effective_resolution(r["market_id"], r["resolved_at"], r["outcome"], c))
             cutoff = (effective - timedelta(days=horizon_days)).isoformat()
-            snap = c.execute("""
+            snap = c.execute(
+                """
                 SELECT yes_price FROM snapshots
                 WHERE market_id = ? AND captured_at <= ? AND yes_price IS NOT NULL
                 ORDER BY captured_at DESC LIMIT 1
-            """, (r["market_id"], cutoff)).fetchone()
+            """,
+                (r["market_id"], cutoff),
+            ).fetchone()
             if not snap:
                 continue
-            out.append(Forecast(r["market_id"], r["question"], snap["yes_price"],
-                                1 if r["outcome"] == "YES" else 0))
+            out.append(Forecast(r["market_id"], r["question"], snap["yes_price"], 1 if r["outcome"] == "YES" else 0))
     return out
 
 
@@ -131,7 +139,9 @@ def report(horizon_days: int) -> dict:
             "n": len(longshots),
             "mean_price": sum(f.price for f in longshots) / len(longshots),
             "observed_rate": sum(f.outcome for f in longshots) / len(longshots),
-        } if longshots else None,
+        }
+        if longshots
+        else None,
     }
 
 
@@ -140,22 +150,26 @@ def main() -> None:
     parser.add_argument("--horizon", type=int, choices=HORIZONS_DAYS, help="Only this horizon (days)")
     args = parser.parse_args()
 
-    for h in ([args.horizon] if args.horizon else HORIZONS_DAYS):
+    for h in [args.horizon] if args.horizon else HORIZONS_DAYS:
         r = report(h)
         print(f"\n=== {h}-day horizon ===")
         if not r["n"]:
             print("  No resolved markets with a snapshot this far before resolution yet.")
             continue
         skill = f"{r['brier_skill']:+.3f}" if r["brier_skill"] is not None else "n/a"
-        print(f"  Markets: {r['n']}   Base rate: {r['base_rate']:.1%}   "
-              f"Brier: {r['brier']:.4f}   Skill vs base rate: {skill}")
+        print(
+            f"  Markets: {r['n']}   Base rate: {r['base_rate']:.1%}   "
+            f"Brier: {r['brier']:.4f}   Skill vs base rate: {skill}"
+        )
         print(f"  {'bucket':>9}  {'mean price':>10}  {'YES rate':>8}  {'n':>5}")
         for b in r["bins"]:
             print(f"  {b['bin']:>9}  {b['mean_price']:>10.3f}  {b['observed_rate']:>8.3f}  {b['count']:>5}")
         if r["longshot"]:
             ls = r["longshot"]
-            print(f"  Longshots (YES <= {LONGSHOT_MAX}): priced {ls['mean_price']:.3f}, "
-                  f"won {ls['observed_rate']:.3f} of {ls['n']}")
+            print(
+                f"  Longshots (YES <= {LONGSHOT_MAX}): priced {ls['mean_price']:.3f}, "
+                f"won {ls['observed_rate']:.3f} of {ls['n']}"
+            )
 
 
 if __name__ == "__main__":

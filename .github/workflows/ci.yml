@@ -18,6 +18,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
       - run: ruff check .
+      - run: ruff format --check .
       - run: pytest -q
 
   # The always-on image (docs/always-on.md): build it, then check it starts and knows its timetable.

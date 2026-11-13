@@ -4,9 +4,124 @@
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-PolyBot is a research project on [Polymarket](https://polymarket.com) prediction markets. It started as a data pipeline and a rule-based paper trader, and **v2 adds an autonomous agent** that estimates its own probabilities, sizes bets with the Kelly criterion, and learns from how markets resolve. Everything is paper trading; no real money is ever used.
+PolyBot is a research project on [Polymarket](https://polymarket.com) prediction markets. It asks one question: **how good are the market's prices as probabilities, and can a model do better once fees are paid?** To find out, it:
 
-The core question throughout is **how well prediction-market prices forecast outcomes, and whether a disciplined model can find mispricings**. The v1 calibration tracker scores market prices against outcomes; the v2 agent asks whether any market is priced far enough from a calibrated estimate to be worth a bet, and logs every decision so the answer is auditable.
+- **records** every open market above a size floor, and streams the live order books and trades of the 300 biggest;
+- **scores** the market's prices against how markets actually resolve (calibration and the Brier score);
+- **paper-trades** a model's opinions with fake money, filled at the recorded bid and ask, with fees;
+- **compares** the same questions' prices on [Kalshi](https://kalshi.com), a second exchange.
+
+> **Research and paper trading only.** PolyBot has no wallet, no exchange keys and no code that can place an order on any site. Every trade in it is simulated with fake money. Nothing here is financial advice, and no strategy in it has been shown to make money.
+
+## How the pieces fit
+
+```mermaid
+flowchart LR
+    GA[Polymarket<br/>market list] -->|every 15 min| DI[discover<br/>market catalog]
+    DI -->|top 300| ST[streamer]
+    WS[Polymarket<br/>websocket] --> ST
+    ST --> RAW[(daily files<br/>order books, trades)]
+    GA -->|every 10 min, hourly| AG[agent, pipeline<br/>price snapshots]
+    AG --> DB[(SQLite)]
+    KA[Kalshi<br/>public prices] --> KJ[kalshi<br/>every 10 min]
+    KJ --> RAW
+    RAW --> RU[rollup<br/>nightly]
+    DB --> RU
+    RU --> WH[(warehouse<br/>Parquet + DuckDB)]
+    WH --> CA[calibrate<br/>Brier, charts]
+    WH --> PA[paper<br/>every 5 min]
+    PA --> LE[(PAPER ledger)]
+    PA --> SF[status file]
+```
+
+Seven jobs do the work. Each is a small program that runs, saves its results and exits, except the streamer, which stays connected all the time:
+
+| Job | When | What it does |
+|---|---|---|
+| `stream` | all the time | records the order books and trades of the 300 selected markets from Polymarket's websocket |
+| `discover` | every 15 minutes | lists every open market above the floors in `config.yaml` and picks the 300 to stream |
+| `agent` | every 10 minutes | the v2 agent: price snapshots, its own probability estimates and paper bets |
+| `pipeline` | hourly | the original v1 cycle: snapshots, resolutions and rule-based paper trades |
+| `paper` | every 5 minutes | the PAPER account: trades a model's probabilities against the recorded books |
+| `kalshi` | every 10 minutes | the same questions' prices on Polymarket and Kalshi, side by side |
+| `rollup` | nightly | packs finished days into Parquet, copies snapshots, builds one-minute bars, rebuilds the calibration report |
+
+## Running it
+
+**On the Windows PC (how it runs now).** The jobs are Windows scheduled tasks that run inside WSL. From the project folder in PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1   # install (or reload) all seven tasks
+powershell -ExecutionPolicy Bypass -File scripts\health.ps1          # is it working?
+powershell -ExecutionPolicy Bypass -File scripts\stream.ps1 stop     # stop the streamer (also: start, status)
+Get-ScheduledTask PolyBot-* | Disable-ScheduledTask                  # pause the other jobs too
+Get-ScheduledTask PolyBot-* | Enable-ScheduledTask                   # resume them (then stream.ps1 start)
+```
+
+The tasks start again by themselves after a reboot, but nothing runs while the PC sleeps. [More on the tasks](#running-it-on-a-schedule-windows--wsl).
+
+**Always on (Docker, a cloud server or a Mac).** `polybot run` runs all seven jobs on the same timetable from one process. [`docs/always-on.md`](docs/always-on.md) shows how to run it on a server for about $5 a month, or under launchd on a Mac.
+
+```bash
+docker compose up -d --build                    # build and start; it restarts by itself
+docker compose exec polybot polybot health      # is it working?
+docker compose stop                             # stop; `docker compose start` resumes
+```
+
+**By hand**, for one job at a time (Python 3.10 or newer):
+
+```bash
+git clone https://github.com/JayZhangDev/PolyBot.git && cd PolyBot
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+python -m polybot discover      # list the markets and pick the ones to stream
+python -m polybot stream        # record live order books and trades (Ctrl+C stops it)
+python -m polybot health        # check everything
+```
+
+Every command is listed under [Other entry points](#quickstart).
+
+## Checking it
+
+`python -m polybot health` (or `scripts\health.ps1` on Windows) answers "is it still collecting, and is anything broken?" in one screen. Its exit code is 0 when data is fresh and 1 when the newest price is more than 30 minutes old, so a script can check it too. A shortened example:
+
+```
+PolyBot health at 2026-11-13 06:09 UTC
+
+Last successful fetch : 2026-11-13 06:05 UTC (4 min ago)  [OK]
+Longest gap, last 24h : 7 min with no data
+
+Live stream:
+  State          : connected, status written 7s ago
+  Markets        : 300 (600 tokens)
+  Today (UTC)    : 27,553 trades, 100,761 book rows, 0 reconnects
+
+PAPER account (fake money; no real orders):
+  Equity     : $995.93  PnL -4.07 total, -1.55 today
+  Positions  : 18 open, 0 closed, win rate n/a, max drawdown 0.4%
+```
+
+The full report also lists every job's runs and errors in the last 24 hours, disk use per day, the latest calibration numbers and the Kalshi comparison. Look first at **Last successful fetch** (it should be minutes old), **Longest gap** (a long gap means the PC slept), and **Errors**.
+
+## Results so far
+
+Measured on 2026-11-13, two weeks after the price history starts. The numbers are early and most of them rest on small samples.
+
+| | |
+|---|---|
+| Markets known | about 1,900 open markets above $10,000 of liquidity and $50,000 traded, out of about 90,000 open |
+| Streaming live | 300 markets: about 100,000 order-book changes and 30,000 trades a day |
+| Data stored | about 60 MB a day: 22 MB of packed order books and trades, 30 to 40 MB of snapshots in SQLite |
+| Market Brier score, 1 day before the outcome | **0.0946** on 76 resolved markets (always saying 50% would score 0.25) |
+| Market Brier score, 7 days before | 0.3677 on 13 markets: too few to mean much yet |
+| PAPER account | $995.93 from $1,000 (**-$4.07**), 18 positions open, none closed yet |
+| Kalshi comparison | 328 questions matched; the two prices are typically 0.4 cents apart |
+
+![Calibration of market prices one day before the outcome](docs/calibration_1d.png)
+
+*How to read the chart:* each dot is a group of markets with similar prices. A dot on the diagonal means markets priced near, say, 30% really did resolve YES about 30% of the time. So far favourites (70% to 90%) won more often than their prices said, and longshots under 10% never won: the pattern called the favourite-longshot bias. With 76 markets that is a hint, not a finding. The full report is rebuilt every night in `reports/calibration.md`.
+
+The paper loss so far is mostly the spread. A position is bought at the ask and valued at the bid, so every new trade starts slightly down, and none has resolved yet. The [PAPER ledger](#the-paper-ledger) section explains the account.
 
 ## Evolution: from pipeline to agent
 
@@ -26,13 +141,13 @@ The core question throughout is **how well prediction-market prices forecast out
 | **v2.7** | Always-on option: one-process scheduler, Dockerfile, Mac launchd file, guide | Keep collecting data on a $5 cloud server while your own computer sleeps |
 | **v2.8** | Kalshi comparison: question matcher, both sites' prices every 10 minutes | Measure how far two exchanges price the same question apart |
 
-The hourly pipeline is unchanged. The agent runs beside it, shares its market, snapshot and resolution tables, and keeps its own positions and bankroll so the two strategies can be compared cleanly. The git history shows each step.
+The hourly pipeline still runs unchanged. The agent runs beside it, shares its market, snapshot and resolution tables, and keeps its own positions and bankroll so the strategies can be compared cleanly. The git history shows each step.
 
 [![PolyBot dashboard](docs/screenshots/dashboard.png)](https://jayzhangdev.github.io/PolyBot/)
 
 **[Live dashboard →](https://jayzhangdev.github.io/PolyBot/)**
 
-## How it works
+## The v1 hourly pipeline
 
 ```mermaid
 flowchart LR
@@ -88,7 +203,7 @@ DESCRIPTION = "One sentence on the idea being tested."
 
 
 def predict(market: dict) -> float | None:
-    return market["price"]          # returning the price scores exactly like the market
+    return market["price"]  # returning the price scores exactly like the market
 ```
 
 Two examples ship with the repo: `favorite_longshot.py` (pushes each price a little further from 50%) and `momentum_24h.py` (adds half of the previous day's move). See [`models/README.md`](models/README.md) for the full contract.
@@ -99,14 +214,14 @@ The older module `polybot/calibration.py` (30-day horizon, longshot check) is un
 
 ## PolyBot v2: the autonomous agent
 
-`python -m polybot.agent` runs one cycle; a scheduled task runs it every 10 minutes ([setup](#running-the-agent-every-10-minutes-windows--wsl)).
+`python -m polybot.agent` runs one cycle; a scheduled task runs it every 10 minutes ([setup](#running-it-on-a-schedule-windows--wsl)).
 
 ```mermaid
 flowchart LR
     A[Gamma API<br/>2,000 active markets] --> F[Filter<br/>liquidity > $10k<br/>> 7 days left]
     F --> E[Estimator<br/>base rate + recency<br/>x category trust]
-    E --> R[Rank by edge<br/>abs&#40;edge&#41; > 8%]
-    R --> K[Half-Kelly sizing<br/>6% cap, 10 positions]
+    E --> R[Rank by edge<br/>abs&#40;edge&#41; > 1.5%]
+    R --> K[Half-Kelly sizing<br/>6% cap, 25 positions]
     K --> X[(agent_positions<br/>agent_decisions)]
     X --> L[Learning loop<br/>on resolution]
     L --> P[(agent_priors<br/>agent_performance)]
@@ -127,10 +242,10 @@ For each market the agent builds an ensemble estimate from three parts:
 The output for each market is `estimated_prob`, `market_prob` and `edge = estimated_prob - market_prob`.
 
 ### 3. Opportunity filter
-Only markets with `abs(edge) > 8%` are considered, ranked by edge size.
+Only markets with `abs(edge) > 1.5%` are considered, ranked by edge size. (Until 2026-11-11 the bar was 8%; see the findings below.)
 
 ### 4. Kelly sizing
-Buying a binary share at price `c` with win probability `q` has Kelly fraction `(q - c) / (1 - c)` (edge divided by `1 - c`; equivalent to `(b*q - (1-q)) / b` with net odds `b = (1-c)/c`). The agent bets **half-Kelly**, **never more than 6% of bankroll on one market**, and **never more than 10 open positions**. `c` is the executable price (YES at the ask, NO at 1 - bid), so a trade whose edge is eaten by the spread is skipped.
+Buying a binary share at price `c` with win probability `q` has Kelly fraction `(q - c) / (1 - c)` (edge divided by `1 - c`; equivalent to `(b*q - (1-q)) / b` with net odds `b = (1-c)/c`). The agent bets **half-Kelly**, **never more than 6% of bankroll on one market**, and **never more than 25 open positions**. A stake below $2 is skipped and none is larger than $50. `c` is the executable price (YES at the ask, NO at 1 - bid), so a trade whose edge is eaten by the spread is skipped.
 
 ### 5. Paper execution and audit trail
 Every considered trade is written to `agent_decisions` (timestamp, market, question, market probability, estimate, edge, Kelly stake, action, reason, plus the estimator components as JSON). A position opens only if all rules pass; otherwise the reason is logged (`max_positions_reached`, `edge_consumed_by_spread`, `insufficient_cash`, and so on). A repeat skip for the same market is logged at most once every 6 hours so the log stays readable. Nothing is sent to any exchange.
@@ -144,6 +259,7 @@ Each cycle the agent first settles positions whose markets resolved (a winning s
 - **The learning loop is data-starved.** PolyBot has seen only a handful of markets resolve so far, so category priors still sit at their documented defaults. Calibration and accuracy numbers appear on the dashboard as markets resolve.
 - **Dry run at a 0.5% threshold** (separate database, not the real log): 10 positions opened immediately, then 412 candidates were skipped for `max_positions_reached` and 9 because the bid/ask spread consumed the edge. Sizes were small (half-Kelly of about 1% of bankroll) because the edges were.
 - **Exploring lower thresholds.** `python -m polybot.agent --min-edge 0.02` runs a cycle with a different threshold. Use a separate database (`POLYBOT_DB`) for experiments so they do not mix into the main audit log.
+- **Calibration mode since 2026-11-11.** To collect resolved forecasts faster, the agent now trades at a 1.5% edge with up to 25 positions and $2 to $50 stakes. On 2026-11-13 it held 25 positions, none resolved yet, and was down $31.41 of its $1,000, mostly the spread paid on entry.
 
 ### Dashboard: Agent tab
 The static dashboard (`docs/index.html`) has an **Agent** tab with a live opportunity feed (edge bars colour-coded by size, rows pulse when a market newly clears the threshold, refreshed every 30 seconds), open positions with market vs model probability, the full decision log (filter by opened or skipped), and performance by category.
@@ -597,9 +713,10 @@ pytest          # 485 tests: pricing, storage, signals, settlement, resolutions,
                 # the Kalshi client, the question matcher and the comparison job,
                 # and parsers against saved API and websocket messages
 ruff check .
+ruff format --check .
 ```
 
-CI runs both on every push and pull request, on Python 3.10 and 3.12, and builds the Docker image.
+CI runs all three on every push and pull request, on Python 3.10 and 3.12, and builds the Docker image.
 
 ## Roadmap
 

@@ -1,4 +1,5 @@
 """Bankroll + position sizing for paper-trader."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -6,7 +7,7 @@ import sqlite3
 from polybot.db import connect
 
 STARTING_BANKROLL = 1000.0  # paper USDC
-BET_FRACTION = 0.01          # 1% of bankroll per bet
+BET_FRACTION = 0.01  # 1% of bankroll per bet
 MAX_OPEN_POSITIONS = 10
 
 
@@ -54,18 +55,14 @@ def init_portfolio_tables() -> None:
 def get_bankroll() -> float:
     init_portfolio_tables()
     with connect() as c:
-        row = c.execute(
-            "SELECT balance_after FROM bankroll_events ORDER BY id DESC LIMIT 1"
-        ).fetchone()
+        row = c.execute("SELECT balance_after FROM bankroll_events ORDER BY id DESC LIMIT 1").fetchone()
     return float(row["balance_after"]) if row else 0.0
 
 
 def get_open_positions() -> list[sqlite3.Row]:
     init_portfolio_tables()
     with connect() as c:
-        return c.execute(
-            "SELECT * FROM positions WHERE status = 'OPEN' ORDER BY opened_at DESC"
-        ).fetchall()
+        return c.execute("SELECT * FROM positions WHERE status = 'OPEN' ORDER BY opened_at DESC").fetchall()
 
 
 def open_market_ids() -> set[str]:
@@ -82,14 +79,11 @@ def calculate_stake(bankroll: float) -> float:
 
 def record_bankroll_change(delta: float, reason: str) -> float:
     with connect() as c:
-        row = c.execute(
-            "SELECT balance_after FROM bankroll_events ORDER BY id DESC LIMIT 1"
-        ).fetchone()
+        row = c.execute("SELECT balance_after FROM bankroll_events ORDER BY id DESC LIMIT 1").fetchone()
         current = float(row["balance_after"]) if row else 0.0
         new_balance = current + delta
         c.execute(
-            "INSERT INTO bankroll_events (at, delta, balance_after, reason) "
-            "VALUES (datetime('now'), ?, ?, ?)",
+            "INSERT INTO bankroll_events (at, delta, balance_after, reason) VALUES (datetime('now'), ?, ?, ?)",
             (delta, new_balance, reason),
         )
     return new_balance
@@ -121,4 +115,4 @@ if __name__ == "__main__":
     print(f"Open positions:  {s['open_positions']}")
     print(f"Closed:          {s['closed_positions']}  (W: {s['wins']}, L: {s['losses']})")
     print(f"Realized P&L:    ${s['realized_pnl']:.2f}")
-    print(f"Win rate:        {s['win_rate']*100:.1f}%")
+    print(f"Win rate:        {s['win_rate'] * 100:.1f}%")

@@ -1,4 +1,5 @@
 """Tests for the v2 agent: Kelly sizing, probability estimator, risk rules, settlement and learning."""
+
 from __future__ import annotations
 
 import json
@@ -40,6 +41,7 @@ def view(yes=0.5, **kw):
 
 # --------------------------- Kelly calculator ---------------------------
 
+
 def test_kelly_matches_textbook_formula():
     # Buy at 0.40 with a true 55% chance: b = 1.5, f* = (1.5*0.55 - 0.45)/1.5 = 0.25
     assert kelly_fraction(0.55, 0.40) == pytest.approx(0.25)
@@ -61,18 +63,18 @@ def test_stake_is_half_kelly():
 
 
 def test_stake_is_capped_at_six_percent_of_bankroll():
-    assert stake_for(0.9, 0.3, 500.0) == pytest.approx(30.0)      # raw half-Kelly ~42% -> 6% of $500
+    assert stake_for(0.9, 0.3, 500.0) == pytest.approx(30.0)  # raw half-Kelly ~42% -> 6% of $500
     assert stake_for(0.9, 0.3, 800.0, Params(max_stake=1000)) == pytest.approx(48.0)
 
 
 def test_stake_is_capped_at_fifty_dollars():
-    assert stake_for(0.9, 0.3, 1000.0) == pytest.approx(50.0)     # 6% of $1000 is $60, the $50 cap binds
+    assert stake_for(0.9, 0.3, 1000.0) == pytest.approx(50.0)  # 6% of $1000 is $60, the $50 cap binds
     assert stake_for(0.9, 0.3, 100_000.0) == pytest.approx(50.0)
 
 
 def test_stake_below_minimum_is_skipped_not_rounded_up():
     v, e = opp(0.30, 0.45, ask=0.31, bid=0.29)
-    s = decide(v, e, bankroll=30, cash=30, open_count=0, held_market_ids=set())   # half-Kelly ~ $1.4 < $2
+    s = decide(v, e, bankroll=30, cash=30, open_count=0, held_market_ids=set())  # half-Kelly ~ $1.4 < $2
     assert s.action == "SKIP" and s.reason.startswith("stake_below_minimum")
 
 
@@ -85,6 +87,7 @@ def test_stake_cap_follows_params():
 
 
 # --------------------------- Probability estimator ---------------------------
+
 
 def test_calibrated_prob_identity_at_gamma_one():
     for p in (0.05, 0.3, 0.5, 0.9):
@@ -150,13 +153,17 @@ def test_fit_gamma_stays_near_prior_with_little_data():
 
 # --------------------------- Categories and filters ---------------------------
 
-@pytest.mark.parametrize("q,cat", [
-    ("Will Bitcoin hit $150k in 2026?", "crypto"),
-    ("Will the Lakers win the NBA Finals?", "sports"),
-    ("Will Trump win the 2028 election?", "politics"),
-    ("Will SpaceX launch Starship by June?", "science"),
-    ("Will a new flavor of ice cream be announced?", "other"),
-])
+
+@pytest.mark.parametrize(
+    "q,cat",
+    [
+        ("Will Bitcoin hit $150k in 2026?", "crypto"),
+        ("Will the Lakers win the NBA Finals?", "sports"),
+        ("Will Trump win the 2028 election?", "politics"),
+        ("Will SpaceX launch Starship by June?", "science"),
+        ("Will a new flavor of ice cream be announced?", "other"),
+    ],
+)
 def test_categorize_by_keyword(q, cat):
     assert categorize(q) == cat
 
@@ -174,6 +181,7 @@ def test_eligibility_needs_liquidity_and_time():
 
 
 # --------------------------- Risk rules ---------------------------
+
 
 def opp(yes=0.30, est_prob=0.45, **kw):
     """A (view, estimate) pair with a hand-set estimate."""
@@ -195,7 +203,7 @@ def test_opens_no_when_estimate_below_market():
     v, e = opp(0.70, 0.55, ask=0.71, bid=0.69)
     s = decide(v, e, bankroll=1000, cash=1000, open_count=0, held_market_ids=set())
     assert s.action == "OPEN" and s.side == "NO"
-    assert s.entry_price == pytest.approx(0.31)   # 1 - best bid
+    assert s.entry_price == pytest.approx(0.31)  # 1 - best bid
 
 
 def test_skips_at_position_limit():
@@ -227,7 +235,7 @@ def test_skips_when_cash_is_short_and_when_stake_too_small():
 
 # --------------------------- Full cycle, settlement, learning ---------------------------
 
-LOW = Params(min_edge=0.001)   # lets the cycle trade on the small edges the estimator actually produces
+LOW = Params(min_edge=0.001)  # lets the cycle trade on the small edges the estimator actually produces
 
 
 def test_cycle_with_no_edge_opens_nothing_and_logs_run():
@@ -360,6 +368,7 @@ def test_export_state_shape():
 
 def test_export_state_before_first_run():
     from polybot.storage import init_db
+
     init_db()
     with connect() as c:
         assert agent.export_state(c) == {"enabled": False}
@@ -367,8 +376,9 @@ def test_export_state_before_first_run():
 
 # --------------------------- Phase 1 hardening ---------------------------
 
+
 def test_no_side_is_skipped_when_nobody_is_bidding():
-    v, e = opp(0.30, 0.15, ask=0.31)          # the estimate says buy NO, but there is no bid to fill against
+    v, e = opp(0.30, 0.15, ask=0.31)  # the estimate says buy NO, but there is no bid to fill against
     s = decide(v, e, bankroll=1000, cash=1000, open_count=0, held_market_ids=set())
     assert s.action == "SKIP" and s.reason == "no_executable_price"
 
@@ -376,8 +386,10 @@ def test_no_side_is_skipped_when_nobody_is_bidding():
 def test_run_killed_mid_cycle_is_marked_failed_by_the_next_cycle():
     agent.init_agent_tables()
     with connect() as c:
-        c.execute("INSERT INTO agent_runs (started_at, status) VALUES (?, 'running')",
-                  ((NOW - timedelta(hours=2)).isoformat(),))
+        c.execute(
+            "INSERT INTO agent_runs (started_at, status) VALUES (?, 'running')",
+            ((NOW - timedelta(hours=2)).isoformat(),),
+        )
     agent.run_cycle([], now=NOW)
     with connect() as c:
         killed, latest = c.execute("SELECT status, error FROM agent_runs ORDER BY id").fetchall()

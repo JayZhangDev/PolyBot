@@ -10,6 +10,7 @@ is bidding (typical for a market priced near zero), and filling at the midpoint
 there would invent a trade that no real order could get. With no quote on the
 side we need, there is no executable price and the trade is skipped.
 """
+
 from __future__ import annotations
 
 

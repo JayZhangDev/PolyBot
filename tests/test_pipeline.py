@@ -30,6 +30,7 @@ def test_resolution_is_detected_after_market_leaves_active_listing(monkeypatch):
 def test_markets_already_fetched_are_not_refetched(monkeypatch):
     save_snapshot([make_market("42", yes=0.10)])
     paper_trader.run()
-    monkeypatch.setattr(pipeline, "fetch_markets_by_id",
-                        lambda ids: (_ for _ in ()).throw(AssertionError("should not fetch")))
+    monkeypatch.setattr(
+        pipeline, "fetch_markets_by_id", lambda ids: (_ for _ in ()).throw(AssertionError("should not fetch"))
+    )
     assert pipeline.refresh_held_markets(fetched_ids={"42"}) == 0

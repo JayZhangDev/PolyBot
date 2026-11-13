@@ -416,7 +416,7 @@ def markdown(report: dict) -> str:
         "- Markets already priced at 99% or more for the winning side a full horizon before they closed are "
         "left out, so the easiest cases are not counted.",
         "- A model's score is only compared with the market on the markets the model answered.",
-        "- A model gets no verdict until it has been scored on {MIN_VERDICT} markets. Markets that resolve "
+        f"- A model gets no verdict until it has been scored on {MIN_VERDICT} markets. Markets that resolve "
         "together are not independent, so even then the \u00b1 understates the uncertainty.",
         "",
     ]

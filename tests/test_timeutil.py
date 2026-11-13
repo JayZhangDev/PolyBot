@@ -7,12 +7,15 @@ from polybot.timeutil import parse_ts
 UTC = timezone.utc
 
 
-@pytest.mark.parametrize("raw", [
-    "2026-01-02T03:04:05Z",
-    "2026-01-02 03:04:05+00",
-    "2026-01-02T03:04:05+00:00",
-    "2026-01-02T03:04:05",
-])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "2026-01-02T03:04:05Z",
+        "2026-01-02 03:04:05+00",
+        "2026-01-02T03:04:05+00:00",
+        "2026-01-02T03:04:05",
+    ],
+)
 def test_parses_gamma_and_iso_formats(raw):
     assert parse_ts(raw) == datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
 

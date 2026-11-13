@@ -7,6 +7,7 @@ Reads the database read-only and writes only aggregate paper-trading data
 paper_pnl.txt (git-ignored): the v2 agent's paper P&L as one number, for a local
 desktop wallpaper to read.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -40,8 +41,8 @@ def open_positions(c: sqlite3.Connection) -> list[dict]:
     out = []
     for p in _rows(c, "SELECT * FROM positions WHERE status = 'OPEN' ORDER BY opened_at DESC"):
         snap = c.execute(
-            "SELECT yes_price, no_price, captured_at FROM snapshots "
-            "WHERE market_id = ? ORDER BY id DESC LIMIT 1", (p["market_id"],)
+            "SELECT yes_price, no_price, captured_at FROM snapshots WHERE market_id = ? ORDER BY id DESC LIMIT 1",
+            (p["market_id"],),
         ).fetchone()
         mark = None
         if snap:
@@ -51,35 +52,51 @@ def open_positions(c: sqlite3.Connection) -> list[dict]:
             else:
                 mark = no if no is not None else (1 - yes if yes is not None else None)
         value = p["shares"] * mark if mark is not None else None
-        out.append({
-            "market": p["question"], "side": p["side"], "entry_price": p["entry_price"],
-            "current_price": mark, "shares": p["shares"], "stake": p["stake"],
-            "unrealized_pnl": value - p["stake"] if value is not None else None,
-            "opened_at": p["opened_at"], "reason": p["opened_reason"],
-        })
+        out.append(
+            {
+                "market": p["question"],
+                "side": p["side"],
+                "entry_price": p["entry_price"],
+                "current_price": mark,
+                "shares": p["shares"],
+                "stake": p["stake"],
+                "unrealized_pnl": value - p["stake"] if value is not None else None,
+                "opened_at": p["opened_at"],
+                "reason": p["opened_reason"],
+            }
+        )
     return out
 
 
 def resolved(c: sqlite3.Connection) -> list[dict]:
     """Resolved markets, with the paper trade (if any) and whether it was correct."""
     out = []
-    for r in _rows(c, """
+    for r in _rows(
+        c,
+        """
         SELECT r.market_id, r.outcome, r.resolved_at, m.question
         FROM resolutions r JOIN markets m ON m.id = r.market_id
         WHERE r.outcome IS NOT NULL
-        ORDER BY r.resolved_at DESC LIMIT 25"""):
+        ORDER BY r.resolved_at DESC LIMIT 25""",
+    ):
         pos = c.execute(
-            "SELECT side, entry_price, pnl FROM positions WHERE market_id = ? "
-            "ORDER BY id DESC LIMIT 1", (r["market_id"],)).fetchone()
+            "SELECT side, entry_price, pnl FROM positions WHERE market_id = ? ORDER BY id DESC LIMIT 1",
+            (r["market_id"],),
+        ).fetchone()
         correct = None
         if pos and r["outcome"] in ("YES", "NO"):
             correct = pos["side"] == r["outcome"]
-        out.append({
-            "market": r["question"], "outcome": r["outcome"], "resolved_at": r["resolved_at"],
-            "side": pos["side"] if pos else None,
-            "entry_price": pos["entry_price"] if pos else None,
-            "pnl": pos["pnl"] if pos else None, "correct": correct,
-        })
+        out.append(
+            {
+                "market": r["question"],
+                "outcome": r["outcome"],
+                "resolved_at": r["resolved_at"],
+                "side": pos["side"] if pos else None,
+                "entry_price": pos["entry_price"] if pos else None,
+                "pnl": pos["pnl"] if pos else None,
+                "correct": correct,
+            }
+        )
     return out
 
 
@@ -87,8 +104,10 @@ def last_run(c: sqlite3.Connection) -> dict:
     """Last finished pipeline run, from the job_runs table; else the newest snapshot."""
     has_runs = c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'job_runs'").fetchone()
     if has_runs:
-        row = c.execute("SELECT started_at, status FROM job_runs "
-                        "WHERE job = 'pipeline' AND status != 'running' ORDER BY id DESC LIMIT 1").fetchone()
+        row = c.execute(
+            "SELECT started_at, status FROM job_runs "
+            "WHERE job = 'pipeline' AND status != 'running' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
         if row:
             return {"at": row["started_at"], "status": row["status"]}
     row = c.execute("SELECT MAX(captured_at) FROM snapshots").fetchone()
@@ -104,7 +123,7 @@ def write_paper_pnl(agent: dict, path: Path = PNL_FILE) -> float | None:
     summary = agent.get("summary")
     if not summary:
         return None
-    pnl = round(summary["equity"] - summary["starting_bankroll"], 2) + 0.0   # + 0.0 turns -0.0 into 0.0
+    pnl = round(summary["equity"] - summary["starting_bankroll"], 2) + 0.0  # + 0.0 turns -0.0 into 0.0
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(f"{pnl:.2f}\n", encoding="utf-8")
     os.replace(tmp, path)
@@ -135,23 +154,24 @@ def export(out: Path, pnl_out: Path) -> None:
     c.row_factory = sqlite3.Row
 
     opens = open_positions(c)
-    bankroll = c.execute(
-        "SELECT balance_after FROM bankroll_events ORDER BY id DESC LIMIT 1").fetchone()
-    initial = c.execute(
-        "SELECT delta FROM bankroll_events WHERE reason = 'INITIAL_DEPOSIT' LIMIT 1").fetchone()
+    bankroll = c.execute("SELECT balance_after FROM bankroll_events ORDER BY id DESC LIMIT 1").fetchone()
+    initial = c.execute("SELECT delta FROM bankroll_events WHERE reason = 'INITIAL_DEPOSIT' LIMIT 1").fetchone()
     cash = bankroll[0] if bankroll else 0.0
-    realized = c.execute(
-        "SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE status != 'OPEN'").fetchone()[0]
+    realized = c.execute("SELECT COALESCE(SUM(pnl), 0) FROM positions WHERE status != 'OPEN'").fetchone()[0]
     unrealized = sum(p["unrealized_pnl"] or 0 for p in opens)
     market_value = sum(p["stake"] + (p["unrealized_pnl"] or 0) for p in opens)
     closed = _rows(c, "SELECT status FROM positions WHERE status != 'OPEN'")
     wins = sum(1 for p in closed if p["status"] == "CLOSED_WIN")
 
     summary = {
-        "cash": cash, "equity": cash + market_value,
+        "cash": cash,
+        "equity": cash + market_value,
         "starting_bankroll": initial[0] if initial else None,
-        "realized_pnl": realized, "unrealized_pnl": unrealized,
-        "open_count": len(opens), "closed_count": len(closed), "wins": wins,
+        "realized_pnl": realized,
+        "unrealized_pnl": unrealized,
+        "open_count": len(opens),
+        "closed_count": len(closed),
+        "wins": wins,
         "markets_tracked": c.execute("SELECT COUNT(*) FROM markets").fetchone()[0],
         "snapshots": c.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0],
     }

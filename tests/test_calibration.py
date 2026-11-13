@@ -17,8 +17,10 @@ def add_history(mid: str, prices_by_days_before: dict[int, float], outcome: str)
     with connect() as c:
         c.execute("DELETE FROM snapshots WHERE market_id = ?", (mid,))
         for days, price in prices_by_days_before.items():
-            c.execute("INSERT INTO snapshots (market_id, captured_at, yes_price) VALUES (?, ?, ?)",
-                      (mid, (NOW - timedelta(days=days)).isoformat(), price))
+            c.execute(
+                "INSERT INTO snapshots (market_id, captured_at, yes_price) VALUES (?, ?, ?)",
+                (mid, (NOW - timedelta(days=days)).isoformat(), price),
+            )
     m = make_market(mid, yes=1.0 if outcome == "YES" else 0.0, closed=True)
     m["closedTime"] = NOW.isoformat()
     record_resolutions([m])

@@ -1,4 +1,5 @@
 """Timestamp parsing for the formats the Gamma API and SQLite rows use."""
+
 from __future__ import annotations
 
 import re

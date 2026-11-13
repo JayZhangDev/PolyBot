@@ -1,11 +1,13 @@
 """The exporter's paper_pnl.txt: the v2 agent's P&L as one number, read by a local desktop wallpaper."""
+
 from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
 
 _spec = importlib.util.spec_from_file_location(
-    "export_dashboard", Path(__file__).resolve().parent.parent / "scripts" / "export_dashboard.py")
+    "export_dashboard", Path(__file__).resolve().parent.parent / "scripts" / "export_dashboard.py"
+)
 export_dashboard = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(export_dashboard)
 
