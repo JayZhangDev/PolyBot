@@ -55,3 +55,11 @@ fees:
 # Windows way, even though PolyBot runs inside WSL). Never contains keys or wallet addresses.
 status:
   path: status/polybot.json
+
+# The Kalshi comparison: the same questions on Kalshi, priced side by side with Polymarket.
+# Public prices only: no Kalshi account or key, and nothing here can trade.
+# Hand corrections to the pairing go in kalshi_pairs.yaml.
+kalshi:
+  enabled: true             # false switches the comparison job off
+  min_match_score: 0.6      # how alike two questions must read to be paired, from 0 to 1
+  refresh_hours: 24         # how often every Kalshi market is listed again and re-paired

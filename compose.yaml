@@ -19,6 +19,7 @@ services:
     volumes:
       - polybot-data:/app/data # databases, recorded data, logs and reports
       - ./config.yaml:/app/config.yaml:ro # edit config.yaml here; each job reads it when it next starts
+      - ./kalshi_pairs.yaml:/app/kalshi_pairs.yaml:ro # hand corrections to the Kalshi pairing, likewise
     logging:
       driver: json-file
       options:

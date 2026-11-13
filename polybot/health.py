@@ -107,7 +107,23 @@ def collect(now: datetime | None = None) -> dict:
     report["disk"] = disk_report()
     report["calibration"] = rawstore.read_json(rawstore.reports_dir() / "calibration.json")
     report["paper"] = paper_report(now)
+    report["kalshi"] = kalshi_report(now)
     return report
+
+
+def kalshi_report(now: datetime) -> dict | None:
+    """The Kalshi comparison's pairing and today's price rows, or None if it has never paired anything."""
+    pairing = rawstore.read_json(rawstore.data_dir() / "kalshi_pairs.json")
+    if pairing is None:
+        return None
+    today = rawstore.raw_file("price_gaps", now.date().isoformat())
+    return {
+        "paired_at": pairing.get("updated_at"),
+        "pairs": len(pairing.get("matched") or []),
+        "kalshi_markets": pairing.get("kalshi_markets", 0),
+        "rows_today": rawstore.count_rows("price_gaps", now.date().isoformat()) if today.exists() else 0,
+        "last_row_seconds": max(0.0, now.timestamp() - today.stat().st_mtime) if today.exists() else None,
+    }
 
 
 def paper_report(now: datetime) -> dict | None:
@@ -206,6 +222,7 @@ def format_report(r: dict) -> str:
     lines += ["", *_disk_lines(r["disk"])]
     lines += ["", *_calibration_lines(r.get("calibration"))]
     lines += ["", *_paper_lines(r.get("paper"))]
+    lines += ["", *_kalshi_lines(r.get("kalshi"))]
     lines += [
         "",
         f"Database   : {db_path()}",
@@ -242,6 +259,19 @@ def _paper_lines(p: dict | None) -> list[str]:
         f"  Positions  : {p['open_positions']} open, {p['closed_positions']} closed, win rate {win_rate}, "
         f"max drawdown {p['max_drawdown']:.1%}",
         f"  Last run   : {ran}",
+    ]
+
+
+def _kalshi_lines(k: dict | None) -> list[str]:
+    """The "Kalshi comparison" block."""
+    if k is None:
+        return ["Kalshi comparison: not paired yet (run `polybot kalshi`)"]
+    last = "none today" if k["last_row_seconds"] is None else f"last written {k['last_row_seconds'] / 60:.0f} min ago"
+    return [
+        "Kalshi comparison (public prices only):",
+        f"  Pairs      : {k['pairs']} matched, paired {_when(k['paired_at'])} "
+        f"from {k['kalshi_markets']:,} Kalshi markets",
+        f"  Prices     : {k['rows_today']:,} rows today, {last}  (`polybot gaps` for the summary)",
     ]
 
 

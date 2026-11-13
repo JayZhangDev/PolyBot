@@ -24,6 +24,7 @@ The core question throughout is **how well prediction-market prices forecast out
 | **v2.5** | Calibration tracker, `models/` folder, report with charts | Score the market's prices by horizon and category, and score any model against the market |
 | **v2.6** | PAPER ledger: fills at the recorded bid and ask, depth, fees, status file | Trade a model's opinions with fake money as honestly as the recorded books allow |
 | **v2.7** | Always-on option: one-process scheduler, Dockerfile, Mac launchd file, guide | Keep collecting data on a $5 cloud server while your own computer sleeps |
+| **v2.8** | Kalshi comparison: question matcher, both sites' prices every 10 minutes | Measure how far two exchanges price the same question apart |
 
 The hourly pipeline is unchanged. The agent runs beside it, shares its market, snapshot and resolution tables, and keeps its own positions and bankroll so the two strategies can be compared cleanly. The git history shows each step.
 
@@ -156,7 +157,7 @@ The export also writes `paper_pnl.txt` (git-ignored): the agent's paper P&L, equ
 
 ### Running it on a schedule (Windows + WSL)
 
-The six jobs run as Windows scheduled tasks that call into WSL. One script installs them:
+The seven jobs run as Windows scheduled tasks that call into WSL. One script installs them:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
@@ -170,8 +171,9 @@ powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
 | `PolyBot-Stream` | all the time | [`scripts/run_stream.sh`](scripts/run_stream.sh): the live recorder. Its trigger fires at login and every 5 minutes; extra starts are ignored while it runs, so the trigger also restarts it if it dies |
 | `PolyBot-Rollup` | once a day, about two hours after midnight UTC | [`scripts/run_rollup.sh`](scripts/run_rollup.sh): pack finished days into Parquet, copy new snapshots from SQLite, build one-minute bars |
 | `PolyBot-Paper` | every 5 minutes | [`scripts/run_paper.sh`](scripts/run_paper.sh): one PAPER trading cycle, then the status file |
+| `PolyBot-Kalshi` | every 10 minutes | [`scripts/run_kalshi.sh`](scripts/run_kalshi.sh): both sites' prices for every Kalshi pair, re-pairing once a day |
 
-**Reloading.** After editing `install_tasks.ps1`, run the same command again; it replaces all six tasks. Code changes need no reload, because each run starts a fresh Python process.
+**Reloading.** After editing `install_tasks.ps1`, run the same command again; it replaces all seven tasks. Code changes need no reload, because each run starts a fresh Python process.
 
 ```powershell
 Get-ScheduledTask PolyBot-* | Disable-ScheduledTask      # pause
@@ -428,6 +430,44 @@ Each cycle writes `data/status/polybot.json` (the path is `status.path` in `conf
 
 `mode` is always `"paper"`. Besides the four named metrics it adds the ones the page's PolyBot panel already has widgets for (`markets_tracked`, `open_positions`, `trades_today`, `win_rate`) plus `max_drawdown` and `paper_equity`. It never contains keys, wallet addresses or transaction hashes, and it is written to a temporary name and then renamed so the page cannot read half a file. `status` is `"running"` while the streamer is connected and `"idle"` otherwise.
 
+## Kalshi comparison: one question, two exchanges
+
+[Kalshi](https://kalshi.com) is a US prediction-market exchange, and many of its questions also trade on Polymarket. Two prices for the same question are a natural experiment: when they disagree, at least one is off, or the two questions differ in a way the wording hides. PolyBot reads Kalshi's **public** prices only. It has no Kalshi account and no key, and nothing in it can trade there.
+
+The `PolyBot-Kalshi` task ([`polybot/crossmarket.py`](polybot/crossmarket.py)) runs every 10 minutes:
+
+1. **Pairing, once a day.** It lists every open Kalshi market (about 200,000 in November 2026: 108 pages at one a second) and pairs them with the Polymarket catalog using [`polybot/kalshi_match.py`](polybot/kalshi_match.py).
+2. **Prices, every run.** For every pair it fetches both sites' best bid and ask, a few seconds apart, and adds one row to the `price_gaps` table.
+
+**How questions are matched.** Each question becomes a set of meaningful words, with rare words such as names counting more than common ones (the weight is called IDF, inverse document frequency). The score is the weighted share of words the two questions have in common, from 0 to 1. A pair also has to pass checks that catch questions which read alike but are different bets. Each check came from a real mistake seen while building the matcher:
+
+| Check | A pair it rejects |
+|---|---|
+| The numbers agree | "$100,000" against "$90,000" |
+| The meaning words agree | "win the nomination" against "run for the nomination"; "presidential" against "vice presidential"; "win Group F" against "win the Asian Cup" |
+| The deadlines agree | "before 2027" against a Kalshi market that stays open until 2028 |
+| The years agree | an undated "CO-04 House seat" that ends in 2026 against Kalshi's "2028 House race for CO-04" |
+| Only one answer fits | "Inter Milan" fits both Kalshi's "Inter" and its "Milan" |
+| Not a price on one day | "Bitcoin above $76,000 on November 12": each site checks the price at its own time of day |
+
+On 2026-11-13 this paired **332** of about 2,000 Polymarket yes/no questions with a Kalshi market, at a score of 0.6 or more. A read-through turned up one more wrong pair that no check catches (two meetings with different people), and it is removed in [`kalshi_pairs.yaml`](kalshi_pairs.yaml). That file is where hand corrections go: `remove:` for a wrong pair, `add:` for a missed one, with `flip: true` when Kalshi's YES is Polymarket's NO. `reports/kalshi_pairs.md` lists every pair, weakest first, and the near misses with the check each one failed.
+
+**What a row holds** (all YES prices, from 0 to 1):
+
+| Column | Meaning |
+|---|---|
+| `pm_bid`, `pm_ask`, `k_bid`, `k_ask` | the best bid and ask on Polymarket and on Kalshi |
+| `pm_mid`, `k_mid` | the midpoint of each, or the last trade when one side of the book is empty |
+| `gap` | `pm_mid - k_mid`: positive means Polymarket prices YES higher |
+| `crossing` | the most you could lock in per share by buying where YES is cheaper (at the ask) and selling where it is dearer (at the bid), **before fees**. Above zero means the two books overlap |
+
+```bash
+python -m polybot kalshi    # pair again if it is time, then record both sites' prices once
+python -m polybot gaps      # the last day: typical gap, how often the books crossed, the widest pairs
+```
+
+First results (the trial run on 2026-11-13, 331 pairs priced): the typical gap was **0.4 points** (cents per share, median size), 0.9 on average, and 2.7% of pairs were 5 or more points apart. Most "crossed" books were a fraction of a cent on longshots, where the two sites use different price steps. The largest was Marine Le Pen for the 2027 French election: offered at 46.1 cents on Polymarket while Kalshi had a buyer at 51, a 4.9-point overlap before fees.
+
 ## Strategies (v1 pipeline)
 
 | Strategy | Rule | Rationale |
@@ -467,6 +507,8 @@ python -m polybot calibrate           # rebuild the calibration report and score
 python -m polybot paper               # one PAPER trading cycle (fake money)
 python -m polybot account             # the PAPER account at a glance
 python -m polybot run                 # every job on its timetable, until stopped (--plan shows it)
+python -m polybot kalshi              # record Polymarket and Kalshi prices for every pair once
+python -m polybot gaps                # how far apart the two sites priced the same questions
 ```
 
 **Upgrading an existing database?** Run `python -m polybot.resolutions --backfill` once. It checks every market that has already ended, rather than 50 per hour.
@@ -475,7 +517,7 @@ The database lives at `polybot.db` in the project root. Set `POLYBOT_DB=/path/to
 
 ### Running it all the time: Docker, a cloud server or a Mac
 
-`polybot run` is the whole schedule in one process: it keeps the streamer running and starts the other five jobs on the same timetable as the Windows tasks, each as its own process. The [Dockerfile](Dockerfile) and [compose.yaml](compose.yaml) run it in a container, and [`scripts/com.jayzhang.polybot.plist`](scripts/com.jayzhang.polybot.plist) runs it under launchd on a Mac.
+`polybot run` is the whole schedule in one process: it keeps the streamer running and starts the other six jobs on the same timetable as the Windows tasks, each as its own process. The [Dockerfile](Dockerfile) and [compose.yaml](compose.yaml) run it in a container, and [`scripts/com.jayzhang.polybot.plist`](scripts/com.jayzhang.polybot.plist) runs it under launchd on a Mac.
 
 ```bash
 docker compose up -d --build                    # on a server: build and start, restarts by itself
@@ -523,10 +565,14 @@ polybot/
   jobs.py          job lock and the job_runs record of every scheduled run
   logsetup.py      rotating log file with UTC timestamps
   scheduler.py     `polybot run`: all the jobs on their timetable from one process
+  kalshi.py        Kalshi's public market data (read only)
+  kalshi_match.py  pairs Polymarket questions with the same questions on Kalshi
+  crossmarket.py   the Kalshi comparison job and the `polybot gaps` report
   health.py        the `polybot health` report
   cli.py           the `polybot` command
   app.py           Streamlit dashboard
 config.yaml        filters and limits (no secrets)
+kalshi_pairs.yaml  hand corrections to the Kalshi pairing
 models/            forecast models, one file each, scored by the tracker
 reports/           the calibration report and its charts (generated, not in git)
 data/              live data and stream status (not in git)
@@ -540,7 +586,7 @@ tests/fixtures/    real Gamma API responses saved for the parser tests
 ## Testing
 
 ```bash
-pytest          # 446 tests: pricing, storage, signals, settlement, resolutions, calibration,
+pytest          # 485 tests: pricing, storage, signals, settlement, resolutions, calibration,
                 # the agent (Kelly sizing, estimator, risk rules, settlement, learning),
                 # retries, the job lock, health, settings, discovery and the catalog,
                 # the order book, recorder and streamer (fake socket and clock),
@@ -548,6 +594,7 @@ pytest          # 446 tests: pricing, storage, signals, settlement, resolutions,
                 # the calibration tracker, the models and the report,
                 # simulated fills, the strategy, the PAPER ledger and the status file,
                 # the always-on scheduler (fake clock and processes),
+                # the Kalshi client, the question matcher and the comparison job,
                 # and parsers against saved API and websocket messages
 ruff check .
 ```
@@ -568,6 +615,7 @@ CI runs both on every push and pull request, on Python 3.10 and 3.12, and builds
 - [x] **v2.5** Calibration tracker: horizons, categories, `models/` folder, charts and Markdown report
 - [x] **v2.6** PAPER ledger: fills at the recorded bid and ask with depth and fees, edge-threshold strategy, status file
 - [x] **v2.7** Always-on option: `polybot run` scheduler, Dockerfile and compose file, Mac launchd file, guide
+- [x] **v2.8** Kalshi comparison: question matcher with hand corrections, both sites' prices every 10 minutes, gap report
 - [ ] **v0.3** Strategy scorecard: P&L, max drawdown and Brier score per strategy, compared with the market baseline
 - [ ] **v0.4** Full-event fetching and a basket executor for neg-risk mispricings
 
@@ -576,6 +624,9 @@ CI runs both on every push and pull request, on Python 3.10 and 3.12, and builds
 - **Paper only.** No orders are sent anywhere, and fills assume the full stake executes at the top of book. A trade is skipped when the side it needs has no quote; nothing is ever filled at the midpoint.
 - **Fees.** The PAPER ledger charges Polymarket's taker fees; the older v1 trader and the v2 agent still do not.
 - **Simulated fills are optimistic in one way.** They assume the recorded book was still there at the moment of the trade and that nobody else reacted to it. A real order can move the price; a paper one cannot.
+- **The Kalshi pairing can be wrong.** The checks catch the mistakes seen so far, but a pair can still read alike and differ in its small print (the exact source, the time of day, what counts as "announced"). A gap may be a wording difference, not a mispricing; check `reports/kalshi_pairs.md` before reading much into one pair.
+- **Kalshi's fees are not taken off.** The `crossing` column is before fees on both sites. Kalshi's fee formula is in a PDF that could not be read automatically when this was written, so it is left out rather than guessed.
+- **The two prices are a few seconds apart,** fetched one after the other every 10 minutes; a fast move can open a gap that never existed at a single moment.
 - **Sample size.** Calibration needs hundreds of resolved markets per horizon before buckets are meaningful; early numbers are noisy. The price history starts on 2026-10-30, so the 7-day horizon in particular rests on very few markets for now.
 - **Hourly resolution (v1).** Moves inside the hour are invisible to the pipeline, and its momentum signal compares snapshots about 20 to 24 hours apart.
 - **Live data is recorded, not yet used.** The strategies still trade on the 10-minute and hourly snapshots held in SQLite. The warehouse and its one-minute bars are for analysis; nothing reads them to make a trading decision yet.

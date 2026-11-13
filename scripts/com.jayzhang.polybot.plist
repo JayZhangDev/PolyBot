@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   PolyBot on a Mac. launchd starts `polybot run` when you log in and starts it again
-  if it ever stops; that one process runs all six jobs on their timetable.
+  if it ever stops; that one process runs all seven jobs on their timetable.
 
   1. Replace /path/to/PolyBot below (four places) with the real folder.
   2. Copy this file to ~/Library/LaunchAgents/ and load it (see docs/always-on.md).

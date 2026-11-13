@@ -10,7 +10,7 @@ PolyBot only collects data while the computer it runs on is awake. An hour of sl
 
 Each copy of PolyBot keeps its own data and its own PAPER account. Running two at once does no harm, but it doubles the requests sent to Polymarket and splits the record in two. When you move to a server, pause the Windows tasks (`Get-ScheduledTask PolyBot-* | Disable-ScheduledTask`). The Hong Kong island page reads files on the PC, so it will then show PolyBot as stopped.
 
-All three run the same six jobs on the same timetable. On Windows they are six scheduled tasks; everywhere else one process, `polybot run`, does the same work:
+All three run the same seven jobs on the same timetable. On Windows they are seven scheduled tasks; everywhere else one process, `polybot run`, does the same work:
 
 ```
 $ polybot run --plan
@@ -22,6 +22,7 @@ PolyBot scheduler at 2026-11-13 03:31 UTC: what runs and when
   agent     every 10 min at :00, :10, ...             next 03:40, time limit 9 min
   paper     every 5 min at :03, :08, ...              next 03:33, time limit 4 min
   rollup    daily at 02:10 UTC                        next 02:10 tomorrow, time limit 60 min
+  kalshi    every 10 min at :04, :14, ...             next 03:34, time limit 9 min
 ```
 
 Each job runs as its own process, so one crash cannot stop the rest. A job that missed its turn while the machine was off runs once when it comes back.
@@ -35,7 +36,7 @@ A cloud server (a "VPS", or virtual private server) is a small Linux computer in
 What PolyBot needs, measured on the PC in November 2026:
 
 - **Disk:** about 60 MB a day, so roughly 22 GB a year. About 22 MB is the day's order books and trades after the nightly packing. The other 30 to 40 MB is snapshots in the SQLite database, which keeps them even after they are copied to Parquet. A 25 GB disk lasts about a year. `polybot health` shows the use per day.
-- **Memory:** the streamer uses about 90 MB and each job about 80 MB while it runs.
+- **Memory:** the streamer uses about 90 MB and each job about 80 MB while it runs. The Kalshi job's once-a-day pairing peaks near 400 MB, which is why a 1 GB server needs the swap file below.
 - **Network:** one websocket connection and a few hundred small requests an hour.
 
 **Set it up** (one time). Connect with `ssh root@YOUR_SERVER_IP`, then:
@@ -93,7 +94,7 @@ docker compose start
 
 ## Option 2: the Windows desktop
 
-This is how PolyBot runs today: six scheduled tasks that call into WSL ([`scripts/install_tasks.ps1`](../scripts/install_tasks.ps1)). They already survive a reboot and catch up on a missed run. Only three things stop them: the PC **sleeping**, the PC **shutting down**, or you **signing out**. You change these settings yourself:
+This is how PolyBot runs today: seven scheduled tasks that call into WSL ([`scripts/install_tasks.ps1`](../scripts/install_tasks.ps1)). They already survive a reboot and catch up on a missed run. Only three things stop them: the PC **sleeping**, the PC **shutting down**, or you **signing out**. You change these settings yourself:
 
 1. **No sleep while plugged in.** Settings > System > Power & battery > Screen, sleep & hibernate timeouts. Set the "plugged in" sleep time to **Never**. The screen may still turn off, which does not affect PolyBot. The same from PowerShell:
 

@@ -26,6 +26,7 @@ def temp_db(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYBOT_REPORTS_DIR", str(tmp_path / "reports"))
     monkeypatch.setenv("POLYBOT_HEARTBEAT_DIR", str(tmp_path))  # the watcher's two files stay out of the project
     monkeypatch.setenv("POLYBOT_MODELS_DIR", str(tmp_path / "models"))  # empty unless a test adds models
+    monkeypatch.setenv("POLYBOT_KALSHI_PAIRS", str(tmp_path / "kalshi_pairs.yaml"))  # absent unless a test writes one
     monkeypatch.setattr("polybot.http._shared_session", _no_network)
     yield path
     # Close any log file a test opened, so the temporary folder can be deleted afterwards.
@@ -39,10 +40,19 @@ def _no_network():
     raise AssertionError("a test tried to use the real network; give it a fake instead")
 
 
-def make_market(mid: str = "1", *, yes: float = 0.5, bid: float | None = None,
-                ask: float | None = None, volume: float = 1_000_000, days_out: int = 30,
-                closed: bool = False, event_id: str | None = None, neg_risk: bool = False,
-                question: str | None = None) -> dict:
+def make_market(
+    mid: str = "1",
+    *,
+    yes: float = 0.5,
+    bid: float | None = None,
+    ask: float | None = None,
+    volume: float = 1_000_000,
+    days_out: int = 30,
+    closed: bool = False,
+    event_id: str | None = None,
+    neg_risk: bool = False,
+    question: str | None = None,
+) -> dict:
     """A Gamma API market payload with only the fields PolyBot reads."""
     end = datetime.now(timezone.utc) + timedelta(days=days_out)
     m = {

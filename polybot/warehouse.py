@@ -10,16 +10,17 @@ we connect we tell DuckDB where they are by creating *views*: saved queries
 that look like tables. That way the streamer, the jobs and a person running a
 query never fight over one database file.
 
-Five tables are available:
+Six tables are available:
 
-* ``book_top``   top of each order book over time (live, from the websocket)
-* ``trades``     every trade (live, from the websocket)
-* ``snapshots``  the 10-minute and hourly price snapshots (copied from SQLite)
-* ``markets``    one row per market: question, category, end date, outcome
-* ``bars_1m``    one-minute bars built from ``book_top`` and ``trades``
+* ``book_top``    top of each order book over time (live, from the websocket)
+* ``trades``      every trade (live, from the websocket)
+* ``snapshots``   the 10-minute and hourly price snapshots (copied from SQLite)
+* ``markets``     one row per market: question, category, end date, outcome
+* ``bars_1m``     one-minute bars built from ``book_top`` and ``trades``
+* ``price_gaps``  the same question's prices on Polymarket and Kalshi, every 10 minutes
 
-Each of the first two is today's CSV plus the Parquet of finished days, joined
-into one table, so a query always sees data up to the last couple of seconds.
+``book_top``, ``trades`` and ``price_gaps`` are today's CSV plus the Parquet of
+finished days, joined into one table, so a query always sees the newest rows.
 """
 
 from __future__ import annotations
@@ -71,6 +72,13 @@ SCHEMAS: dict[str, dict[str, str]] = {
         "outcome": "VARCHAR",
         "resolved_at": "VARCHAR",
         "in_catalog": "BOOLEAN",
+    },
+    # Written by polybot/crossmarket.py; prices are YES prices from 0 to 1.
+    "price_gaps": {
+        "ts": "VARCHAR",
+        "polymarket_id": "VARCHAR",
+        "kalshi_ticker": "VARCHAR",
+        **{name: "DOUBLE" for name in ("pm_bid", "pm_ask", "pm_mid", "k_bid", "k_ask", "k_mid", "gap", "crossing")},
     },
 }
 TIME_COLUMNS = {"ts", "end_date", "first_seen", "last_seen", "resolved_at"}
@@ -155,7 +163,7 @@ def table_sql(table: str) -> str:
     return " UNION ALL BY NAME ".join(parts) if parts else _empty_select(table)
 
 
-VIEWS = ("book_top", "trades", "snapshots", "markets", "bars_1m")
+VIEWS = ("book_top", "trades", "snapshots", "markets", "bars_1m", "price_gaps")
 READ_ONLY_STARTS = ("select", "with", "describe", "show", "summarize")
 
 

@@ -86,6 +86,11 @@ class Settings:
     # --- the status file read by the Hong Kong island page
     status_path: str = "status/polybot.json"
 
+    # --- the Kalshi comparison (public prices only; nothing here can trade)
+    kalshi_enabled: bool = True
+    kalshi_min_score: float = 0.6  # how alike two questions must read to be paired, from 0 to 1
+    kalshi_refresh_hours: float = 24.0  # how often every Kalshi market is listed again and re-paired
+
     def fee_rate(self, category: str, market_rate: float | None = None) -> float:
         """The taker fee rate for a market: its own rate when the API gave one, else its category's."""
         if market_rate is not None:
@@ -130,6 +135,12 @@ def _positive(name: str, value: object) -> float:
 def _whole(name: str, value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ConfigError(f"{name} must be a whole number of 1 or more, got {value!r}")
+    return value
+
+
+def _flag(name: str, value: object) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"{name} must be true or false, got {value!r}")
     return value
 
 
@@ -202,6 +213,11 @@ _LAYOUT: dict[str, dict[str, tuple[str, Callable[[str, object], object]]]] = {
         "taker_rate_by_category": ("fee_rates", _fee_table),
     },
     "status": {"path": ("status_path", _text)},
+    "kalshi": {
+        "enabled": ("kalshi_enabled", _flag),
+        "min_match_score": ("kalshi_min_score", _between(0.3, 1, "a score")),
+        "refresh_hours": ("kalshi_refresh_hours", _between(1, 168, "a number of hours")),
+    },
 }
 
 

@@ -25,6 +25,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("pipeline", help="run one hourly cycle now")
     sub.add_parser("agent", help="run one agent cycle now (extra options are passed through)")
     sub.add_parser("run", help="run every job on its timetable from one process (Docker, a server or a Mac)")
+    sub.add_parser("kalshi", help="pair questions with Kalshi if due, then record both sites' prices once")
+    sub.add_parser("gaps", help="how far apart Polymarket and Kalshi priced the same questions in the last day")
     args, rest = parser.parse_known_args(argv)
 
     # Imported here so `polybot health` stays quick and does not load the trading code.
@@ -71,6 +73,13 @@ def main(argv: list[str] | None = None) -> int:
         from polybot.scheduler import main as run_main
 
         return run_main(rest)
+    if args.command in ("kalshi", "gaps"):
+        from polybot import crossmarket
+
+        if args.command == "kalshi":
+            return crossmarket.main()
+        print(crossmarket.gap_report())
+        return 0
     from polybot.agent import main as agent_main
 
     return agent_main(rest)

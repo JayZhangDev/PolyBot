@@ -1,4 +1,4 @@
-# Registers PolyBot's six Windows scheduled tasks. All run inside WSL.
+# Registers PolyBot's seven Windows scheduled tasks. All run inside WSL.
 #
 #   PolyBot-Hourly     the pipeline, once an hour at five past
 #   PolyBot-Agent      the paper-trading agent, every 10 minutes
@@ -6,11 +6,12 @@
 #   PolyBot-Stream     the live websocket recorder, which runs all the time
 #   PolyBot-Rollup     the daily rollup: pack finished days, copy snapshots, build bars
 #   PolyBot-Paper      the PAPER trading cycle and the status file, every 5 minutes
+#   PolyBot-Kalshi     Polymarket and Kalshi prices for the same questions, every 10 minutes
 #
 # Docker and the Mac run the same timetable from one process instead (polybot/scheduler.py,
 # `polybot run`). If you change a time here, change it there too; tests/test_scheduler.py checks.
 #
-# Install, or reload after changing this file (safe to run again; it replaces all six):
+# Install, or reload after changing this file (safe to run again; it replaces all seven):
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\install_tasks.ps1
 #
@@ -117,4 +118,12 @@ if (Test-Wanted "PolyBot-Rollup") {
 if (Test-Wanted "PolyBot-Paper") {
     Register-PolyBotTask -Name "PolyBot-Paper" -Script "run_paper.sh" -EveryMinutes 5 -StartMinute 3 `
         -LimitMinutes 4 -Wake $false -Description "PolyBot PAPER trading cycle and status file, every 5 minutes (WSL)"
+}
+
+# The Kalshi comparison runs at 4, 14, 24 ... past the hour, between the other jobs. Once a day it lists
+# every Kalshi market (about two and a half minutes, one page a second) before pairing; other runs take
+# seconds. Its downloads happen before it takes the database lock, so it never holds the others up.
+if (Test-Wanted "PolyBot-Kalshi") {
+    Register-PolyBotTask -Name "PolyBot-Kalshi" -Script "run_kalshi.sh" -EveryMinutes 10 -StartMinute 4 `
+        -LimitMinutes 9 -Wake $false -Description "PolyBot Kalshi comparison: both sites' prices, every 10 minutes (WSL)"
 }

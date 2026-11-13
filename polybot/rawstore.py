@@ -5,6 +5,7 @@ Layout, under ``data/`` (never committed to git)::
     data/raw/book_top/2026-11-12.csv                  today's live rows, still growing
     data/raw/book_top/date=2026-11-11/data.parquet    a finished day, packed
     data/raw/trades/...                               the same two forms
+    data/raw/price_gaps/...                           Polymarket and Kalshi prices side by side, the same two forms
     data/raw/snapshots/date=2026-11-11/part-*.parquet the 10-minute and hourly price snapshots
     data/raw/markets/markets.parquet                  one row per market
     data/bars/bars_1m/date=2026-11-11/data.parquet    one-minute bars
@@ -31,7 +32,8 @@ from pathlib import Path
 from polybot.db import PROJECT_ROOT
 
 TABLES = ("book_top", "trades")  # written live by the streamer, as CSV
-DAY_TABLES = ("book_top", "trades", "snapshots")  # everything stored one folder per day
+CSV_TABLES = (*TABLES, "price_gaps")  # every table written as daily CSV and packed into Parquet by the rollup
+DAY_TABLES = ("book_top", "trades", "snapshots", "price_gaps")  # everything stored one folder per day
 USAGE_TABLES = (*DAY_TABLES, "bars")  # what the disk-usage report lists
 
 

@@ -1,6 +1,6 @@
 """One process that runs all of PolyBot's jobs: the always-on option.
 
-On the Windows PC the jobs are six scheduled tasks (``scripts/install_tasks.ps1``).
+On the Windows PC the jobs are seven scheduled tasks (``scripts/install_tasks.ps1``).
 A Docker container, a cloud server or a Mac has no Windows Task Scheduler, so this
 module does the same work from one long-running process:
 
@@ -88,6 +88,7 @@ JOBS: tuple[Job, ...] = (
         limit_minutes=9,
     ),
     Job("paper", (("-m", "polybot.paper"),), every_minutes=5, offset_minutes=3, limit_minutes=4),
+    Job("kalshi", (("-m", "polybot.crossmarket"),), every_minutes=10, offset_minutes=4, limit_minutes=9),
     Job("rollup", (("-m", "polybot.rollup"),), every_minutes=24 * 60, offset_minutes=2 * 60 + 10, limit_minutes=60),
 )
 

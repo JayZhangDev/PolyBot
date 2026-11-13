@@ -1,0 +1,21 @@
+# Hand-checked corrections to the Kalshi pairing (polybot/kalshi_match.py).
+#
+# The matcher pairs Polymarket and Kalshi questions automatically. It is right most of
+# the time, but wording can fool it. reports/kalshi_pairs.md lists every pair (weakest
+# first) and the near misses, each with its two IDs: the Polymarket market ID and the
+# Kalshi ticker.
+#
+#   remove:  pairs the matcher got wrong.
+#   add:     pairs it missed. Add "flip: true" when Kalshi's YES means Polymarket's NO.
+#
+# Changes are used from the next run (within 10 minutes). Research only.
+
+remove:
+  # Different people: Polymarket asks about Trump and Putin, Kalshi about Putin and Zelenskyy.
+  - polymarket: "2364952"
+    kalshi: KXPUTINZELENSKYYLOCATION-28-SWZ
+  # One game (November 14) against winning the whole Worlds 2026 tournament.
+  - polymarket: "4397033"
+    kalshi: KXLOLGAME-26NOV141400GENBLG-BLG
+
+add: []

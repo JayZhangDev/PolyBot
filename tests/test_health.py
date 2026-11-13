@@ -126,7 +126,10 @@ def test_disk_usage_is_listed_per_day_newest_first():
     assert report["disk"]["data_bytes"] > 4_000_000 and report["disk"]["sqlite_bytes"] > 0
     text = health.format_report(report)
     assert "Disk usage by day (UTC), newest first:" in text
-    assert "2026-11-11     3.0 MB   book_top 3.0 MB, trades 0.0 MB, snapshots 0.0 MB, bars 0.0 MB" in text
+    assert (
+        "2026-11-11     3.0 MB   book_top 3.0 MB, trades 0.0 MB, snapshots 0.0 MB, price_gaps 0.0 MB, bars 0.0 MB"
+        in text
+    )
     assert "All of data/ : 4.0 MB" in text
 
 

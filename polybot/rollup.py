@@ -95,7 +95,7 @@ def pack_finished_days(con: duckdb.DuckDBPyConnection, now: float | None = None)
     """Pack every CSV for a day that is over and has not been written to for a while."""
     now = now or time.time()
     packed = []
-    for table in rawstore.TABLES:
+    for table in rawstore.CSV_TABLES:
         for day in rawstore.csv_days(table):
             settled = now - rawstore.raw_file(table, day).stat().st_mtime > SETTLE_SECONDS
             if day < _today() and settled:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polybot"
-version = "2.7.0"
+version = "2.8.0"
 description = "Polymarket data pipeline, calibration tracker and autonomous paper-trading agent"
 readme = "README.md"
 license = { file = "LICENSE" }

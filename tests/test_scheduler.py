@@ -118,6 +118,7 @@ def test_jobs_match_install_tasks_and_the_shell_scripts():
         "Stream": "stream",
         "Rollup": "rollup",
         "Paper": "paper",
+        "Kalshi": "kalshi",
     }
     seen = set()
     for call in text.split("Register-PolyBotTask -Name ")[1:]:  # one piece per task
